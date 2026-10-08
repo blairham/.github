@@ -54,8 +54,10 @@ func main() {
 		os.Exit(int(exit))
 	}
 	if err != nil {
+		// 2, not 1: `drift -exit-code` uses 1 for "something drifts", and a
+		// failure to look must never read as that or as clean.
 		fmt.Fprintln(os.Stderr, "baseline:", err)
-		os.Exit(1)
+		os.Exit(2)
 	}
 }
 
