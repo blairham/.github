@@ -1,0 +1,90 @@
+name: Drift
+
+# Weekly: compares every governed repository's default branch with what the
+# baseline renders for it, and keeps ONE open issue here listing the drift —
+# edited in place each week, closed when nothing drifts. Read-only against the
+# other repositories: they are public, so the default GITHUB_TOKEN reads them;
+# it writes only this repository's issues.
+on:
+  schedule:
+    - cron: '41 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: Drift check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # the one drift issue in this repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+
+      - name: Compare every repository with the baseline
+        id: drift
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          go run ./cmd/baseline drift -exit-code \
+            -baseline-sha "$GITHUB_SHA" -run-url "$RUN_URL" \
+            -o "$RUNNER_TEMP/drift.md" -diffs "$RUNNER_TEMP/drift-full.md"
+          status=$?
+          # 0 is clean, 1 is drift; anything else is the tool failing, which
+          # must not read as "no drift".
+          case "$status" in
+            0) echo "drifted=false" >> "$GITHUB_OUTPUT" ;;
+            1) echo "drifted=true" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$status" ;;
+          esac
+          # A report that lists no repository looked at nothing.
+          grep -q '^## ' "$RUNNER_TEMP/drift.md" || { echo "::error::the report lists no repositories"; exit 1; }
+          cat "$RUNNER_TEMP/drift.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: drift-report
+          path: ${{ runner.temp }}/drift-full.md
+          retention-days: 30
+
+      - name: Open, update or close the drift issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRIFTED: ${{ steps.drift.outputs.drifted }}
+        run: |
+          set -euo pipefail
+          label=drift
+          title="Configuration drift from the baseline"
+          gh label create "$label" --repo "$GITHUB_REPOSITORY" --color D93F0B \
+            --description "Weekly drift check: a repository differs from the baseline" 2>/dev/null || true
+          issue="$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$label" --state open \
+            --json number --jq '.[0].number // empty')"
+          if [ "$DRIFTED" = true ]; then
+            if [ -n "$issue" ]; then
+              gh issue edit "$issue" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/drift.md"
+              echo "updated #$issue"
+            else
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label "$label" \
+                --body-file "$RUNNER_TEMP/drift.md"
+            fi
+          elif [ -n "$issue" ]; then
+            gh issue close "$issue" --repo "$GITHUB_REPOSITORY" \
+              --comment "Nothing drifts as of $GITHUB_SHA."
+          else
+            echo "nothing drifts and no issue is open"
+          fi

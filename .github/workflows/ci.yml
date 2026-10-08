@@ -1,0 +1,53 @@
+name: CI
+
+# blairham/.github's own CI calls its own go-ci.yml by local path, so every
+# change to the reusable workflow runs it before any other repository pins it.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  push:
+    # A squash merge lands a tree no pull request ever built, so the merge
+    # result gets its own run rather than inheriting the branch's green tick.
+    branches: [main]
+  schedule:
+    # Weekly, for go-ci.yml's Fuzz job: it explores on main and on this
+    # schedule, never on a pull request.
+    - cron: '23 5 * * 2'
+
+permissions:
+  contents: read
+
+concurrency:
+  # A superseded push is not worth finishing; only the newest commit matters.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/go-ci.yml
+
+  # The baseline governs this repository too: its own synced files must be
+  # exactly what `make sync` renders, and every overrides file must parse.
+  baseline:
+    name: Baseline in sync
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.ci.outputs.code == 'true'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: needs.ci.outputs.code == 'true'
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+      - name: Every override names a knob and a reason
+        if: needs.ci.outputs.code == 'true'
+        run: go run ./cmd/baseline overrides
+      - name: This repository matches its own baseline
+        if: needs.ci.outputs.code == 'true'
+        run: |
+          go run ./cmd/baseline sync -repo .github -dir .
+          git diff --exit-code
+          test -z "$(git status --porcelain)" || { git status --porcelain; exit 1; }

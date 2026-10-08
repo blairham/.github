@@ -1,0 +1,18 @@
+# blairham/stevedore's approved departures from the baseline.
+overrides:
+  - knob: gitleaks.allowlist
+    reason: >-
+      Carried over verbatim from stevedore's .gitleaks.toml (2026-10-08). Test files hold fake registry and signing credentials as fixtures, and dist/ is GoReleaser output.
+    value: |
+      [allowlist]
+      description = "Global allowlist for false positives"
+
+      # Files to ignore completely
+      paths = [
+          # Test files often contain fake/example credentials
+          '''.*_test\.go''',
+          # Build output
+          '''^dist/''',
+          # Vendored dependencies
+          '''^vendor/''',
+      ]

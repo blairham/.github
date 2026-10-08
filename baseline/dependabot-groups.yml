@@ -1,0 +1,34 @@
+# Dependabot gomod groups. A group is rendered into a repository's
+# dependabot.yml when its go.mod directly requires a module matching one of the
+# group's patterns, so these are derived values, not overrides. `*` matches any
+# run of characters, as in dependabot's own patterns.
+groups:
+  - name: aws-sdk
+    comment: aws-sdk-go-v2 releases its modules together; one PR, not six.
+    patterns:
+      - github.com/aws/aws-sdk-go-v2*
+  - name: kubernetes
+    comment: client-go, api and apimachinery move in lockstep with each other and with controller-runtime; split, they fail to build.
+    patterns:
+      - k8s.io/*
+      - sigs.k8s.io/*
+  - name: franz-go
+    comment: kgo, kadm and kmsg are versioned separately but released together.
+    patterns:
+      - github.com/twmb/franz-go*
+  - name: charm
+    comment: The Charm stack (bubbletea, bubbles, lipgloss) and tuikit, which builds on it, move as one line.
+    patterns:
+      - charm.land/*
+      - github.com/charmbracelet/*
+      - github.com/blairham/tuikit
+  - name: docker
+    comment: The Docker SDK and the moby modules it is split across.
+    patterns:
+      - github.com/docker/*
+      - github.com/moby/*
+  - name: grpc
+    comment: Generated gRPC code is tied to both modules.
+    patterns:
+      - google.golang.org/grpc
+      - google.golang.org/protobuf

@@ -1,0 +1,42 @@
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# Rendered from blairham/.github baseline/dependabot.yml.tmpl by `make sync`.
+# Groups are derived from go.mod: a group appears when the module requires
+# something it covers. The docker ecosystem appears when there is a Dockerfile.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 10
+[%- if .DependabotGroups %]
+    groups:
+[%- range .DependabotGroups %]
+[% comment 6 .Comment %]
+      [% .Name %]:
+        patterns:
+[%- range .Patterns %]
+          - "[% . %]"
+[%- end %]
+[%- end %]
+[%- end %]
+  # Bumps the SHA pins and their `# vX.Y.Z` comments together, including the
+  # pin on blairham/.github's reusable workflows.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+[%- if .HasDockerfile %]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    ignore:
+      # A Go minor bump moves go.mod and .tool-versions by hand, not as a lone
+      # Dockerfile bump. Digest and patch updates still come through.
+      - dependency-name: [% .DockerGolangName %]
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+[%- end %]

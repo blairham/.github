@@ -1,0 +1,12 @@
+# blairham/localiam's approved departures from the baseline.
+overrides:
+  - knob: gitleaks.allowlist
+    reason: >-
+      Carried over verbatim from localiam's .gitleaks.toml (2026-10-08). The golden SigV4 test vectors are signed with AWS's PUBLISHED example credentials (from AWS's own signing documentation), allowlisted by exact value, never by pattern.
+    value: |
+      [allowlist]
+      description = "AWS published SigV4 example credentials used as golden test vectors"
+      regexes = [
+        '''AKIDEXAMPLE''',
+        '''wJalrXUtnFEMI/K7MDENG\+bPxRfiCYEXAMPLEKEY''',
+      ]

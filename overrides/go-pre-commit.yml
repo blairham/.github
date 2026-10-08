@@ -1,0 +1,18 @@
+# blairham/go-pre-commit's approved departures from the baseline.
+overrides:
+  - knob: gitleaks.allowlist
+    reason: >-
+      Carried over verbatim from go-pre-commit's .gitleaks.toml (2026-10-08). Test files hold fake credentials as hook fixtures, and build/ is this repo's build output.
+    value: |
+      [allowlist]
+      description = "Global allowlist for false positives"
+
+      # Files to ignore completely
+      paths = [
+          # Test files often contain fake/example credentials
+          '''.*_test\.go''',
+          # Build output
+          '''^build/''',
+          # Vendored dependencies
+          '''^vendor/''',
+      ]

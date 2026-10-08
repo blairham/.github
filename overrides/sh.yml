@@ -1,0 +1,59 @@
+# blairham/sh's approved departures from the baseline (approved 2026-10-08).
+overrides:
+  - knob: pre-commit.golangci-lint
+    value: false
+    reason: >-
+      golangci-lint runs as sh's CI `Lint` job, which grades the whole tree and
+      is the required check, not as a commit hook. The hook type-checks the
+      whole module on every commit; with several agents committing in
+      parallel worktrees it drove the machine to load 13+ and made one commit
+      take ~6 minutes.
+    ref: https://github.com/blairham/sh/issues/4570
+  - knob: pre-commit.gofumpt-cmd
+    value: true
+    reason: >-
+      `golangci-lint fmt` also runs goimports, which resolves imports by
+      scanning the module cache: ~200s over sh's tree on every Go commit.
+      gofumpt alone is ~1s; import grouping is still enforced by the Lint job's
+      formatters.
+    ref: https://github.com/blairham/sh/issues/3338
+  - knob: golangci.linters-pending
+    reason: >-
+      sh adopts the baseline's linter set one linter per pull request, each
+      landing only once the whole tree is clean under it. This list starts as
+      every baseline linter sh does not run yet and shrinks to empty.
+    value:
+      - whitespace
+      - unconvert
+      - unparam
+      - gocritic
+      - goconst
+      - revive
+      - bodyclose
+      - contextcheck
+      - rowserrcheck
+      - sqlclosecheck
+      - errname
+      - errorlint
+      - forcetypeassert
+      - nilerr
+      - nilnil
+      - noctx
+      - predeclared
+      - prealloc
+      - sloglint
+      - nestif
+      - funlen
+      - gocognit
+      - gocyclo
+      - thelper
+      - tparallel
+      - testableexamples
+      - importas
+      - interfacebloat
+      - wastedassign
+  - knob: release.notes
+    value: generated
+    reason: >-
+      No CHANGELOG.md: dozens of parallel agent pull requests would conflict
+      on it constantly. Release notes are GoReleaser's generated list.

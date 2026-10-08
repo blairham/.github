@@ -1,0 +1,15 @@
+# The repositories the baseline governs. `make drift` and the weekly drift
+# workflow check each one's default branch; overrides/<repo>.yml holds its
+# reasoned departures, if any.
+owner: blairham
+repos:
+  - database-access-controller
+  - dockmaster
+  - go-pre-commit
+  - k4a
+  - k8s-controller-kit
+  - kafka-access-controller
+  - localiam
+  - sh
+  - stevedore
+  - tuikit

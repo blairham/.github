@@ -1,0 +1,261 @@
+name: Go CI
+
+# The three jobs every Go repository here gates a merge on — Pre-commit,
+# Detect changed files, Build and test — plus Fuzz, as one reusable workflow.
+# A caller's ci.yml calls it pinned by commit SHA:
+#
+#   jobs:
+#     ci:
+#       name: CI
+#       uses: blairham/.github/.github/workflows/go-ci.yml@<sha> # main
+#
+# and its checks report as `CI / Pre-commit`, `CI / Detect changed files`,
+# `CI / Build and test (ubuntu-latest)` and `CI / Fuzz`. Repository-specific
+# jobs `needs: ci` and gate their *steps* on `needs.ci.outputs.code` (see the
+# `changes` job for why steps, not jobs).
+#
+# Every job asks for `contents: read` and nothing more. A caller's own
+# `permissions` must grant at least that.
+on:
+  workflow_call:
+    inputs:
+      os:
+        description: >-
+          JSON array of runners for Build and test, e.g. '["ubuntu-latest",
+          "macos-latest"]'. Each runner is its own check,
+          `Build and test (<runner>)`.
+        type: string
+        default: '["ubuntu-latest"]'
+      build-command:
+        description: Builds everything. Runs before the tests.
+        type: string
+        default: go build ./...
+      test-command:
+        description: Runs the tests.
+        type: string
+        default: go test -race ./...
+      golangci-lint-hook:
+        description: >-
+          Run the `golangci-lint-new` pre-commit hook (the baseline
+          .pre-commit-config.yaml defines it). False for a repository whose
+          override moves golangci-lint into its own CI job.
+        type: boolean
+        default: true
+      fuzz-time:
+        description: >-
+          How long each Fuzz target runs (go test -fuzztime). Every target is
+          run in turn, so the job takes about this times the target count.
+        type: string
+        default: 30s
+    outputs:
+      code:
+        description: >-
+          'true' when the change touches anything but prose, or when it is not
+          a pull request. Gate repository-specific steps on it.
+        value: ${{ jobs.changes.outputs.code }}
+
+permissions:
+  contents: read
+
+jobs:
+  # Pre-commit is the lint surface: the same pinned hooks run locally as the
+  # commit gate and here as the merge gate. No standalone golangci-lint-action
+  # — a parallel lint config drifts. It is also the only job that looks at
+  # *every* file rather than at Go: whitespace, secrets, conflict markers, the
+  # toolchain pin.
+  #
+  # Locally the hooks fix; here they only report, and only on the change:
+  # never `--all-files`, which replays the repository's whole backlog at
+  # whoever opened the pull request.
+  pre-commit:
+    name: Pre-commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # `--new-from-merge-base` needs the base branch's history to find
+          # the common ancestor; a shallow clone has none of it.
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          # go-mod-tidy-repo resolves the whole graph; uncached it is slow and flaky.
+          cache: true
+      - name: Resolve the diff this change introduces
+        # A branch create or a force push sends an all-zero `before`, and an
+        # unresolvable ref makes both pre-commit and golangci-lint report
+        # nothing while exiting 0 — the silent pass this job exists to
+        # prevent. So fall back to the merge base with main, then verify every
+        # ref resolves and fail loudly if one does not.
+        id: range
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          base="$BASE"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "No usable base ref ('${base:-empty}') — falling back to the merge base with main"
+            base="$(git merge-base origin/main "$HEAD_SHA")"
+          fi
+          git rev-parse --verify "${base}^{commit}" >/dev/null
+          git rev-parse --verify "${HEAD_SHA}^{commit}" >/dev/null
+          # golangci-lint-new diffs against origin/main; if that is missing it
+          # reports `0 issues` and exits 0 rather than erroring.
+          git rev-parse --verify origin/main >/dev/null
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "head=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "Checking ${base}..${HEAD_SHA}"
+      - name: Run pre-commit hooks
+        # `golangci-lint` is skipped: it is `--new-from-rev HEAD`, which on a
+        # clean checkout compares the tree with an identical HEAD and reports
+        # nothing. The step below asks the same hook the question a runner can
+        # answer.
+        env:
+          SKIP: golangci-lint
+        uses: blairham/go-pre-commit@b3deb289b038678e3b5af79e1442f71fc0f8a28c # v4.6.16
+        with:
+          extra_args: --from-ref ${{ steps.range.outputs.base }} --to-ref ${{ steps.range.outputs.head }}
+      - name: Lint what this change introduces
+        if: inputs.golangci-lint-hook
+        # Same config, same pin, same hook — asked the narrower question and
+        # told not to fix (`--fix=false` in the hook's args).
+        uses: blairham/go-pre-commit@b3deb289b038678e3b5af79e1442f71fc0f8a28c # v4.6.16
+        with:
+          # The step above already restored ~/.cache/pre-commit; restoring it
+          # again untars over Go's read-only module files and fails.
+          cache: 'false'
+          extra_args: --from-ref ${{ steps.range.outputs.base }} --to-ref ${{ steps.range.outputs.head }} --hook-stage manual golangci-lint-new
+
+  # Gating happens inside the jobs, never with a workflow-level `paths:`
+  # filter: a required check that never runs reports as *pending forever*
+  # rather than as passed, which makes a docs-only pull request unmergeable.
+  # The same holds for a job-level `if:` on a required job, which is why the
+  # code jobs below skip their steps instead. Anything unrecognised counts as
+  # code, so when this is wrong it is wrong in the direction of running the
+  # tests.
+  changes:
+    name: Detect changed files
+    needs: pre-commit
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the diff needs the base commit, not just HEAD
+      - id: filter
+        name: Is any of this code?
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          code=false
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            # A merge runs everything: it is the first time this tree is
+            # tested *as main*, and what that protects against is an earlier
+            # merge that broke something nobody has run since.
+            echo "$GITHUB_EVENT_NAME to $GITHUB_REF_NAME — running everything"
+            code=true
+          elif ! git cat-file -e "$BASE" 2>/dev/null; then
+            # No usable base commit — a force push, or a fetch that did not
+            # reach it. An empty diff is indistinguishable from "only prose
+            # changed", so this would silently skip every test.
+            echo "base commit $BASE is not present — running everything"
+            code=true
+          else
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              case "$f" in
+                docs/*|*.md|LICENSE|LICENSE.*|NOTICE|*.png|*.jpg|*.gif|*.svg) ;; # prose
+                *) code=true; break ;;
+              esac
+            done <<<"$(git diff --name-only "$BASE"...HEAD)"
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "changed files are $([ "$code" = true ] && echo 'code — full run' || echo 'prose only — skipping the code jobs')"
+
+  test:
+    name: Build and test (${{ matrix.os }})
+    needs: changes
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.os) }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.code == 'true'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: needs.changes.outputs.code == 'true'
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+      - name: Build
+        if: needs.changes.outputs.code == 'true'
+        env:
+          CMD: ${{ inputs.build-command }}
+        run: eval "$CMD"
+      - name: Test
+        if: needs.changes.outputs.code == 'true'
+        env:
+          CMD: ${{ inputs.test-command }}
+        run: eval "$CMD"
+
+  # Every Fuzz target, each for a bounded time. The unit tests above already
+  # run each target's seed corpus on every pull request; this is the part
+  # that explores. It runs on pushes to main and on the caller's schedule,
+  # not on pull requests: exploration is open-ended, a finding it makes is
+  # rarely caused by the change that happened to be under test, and a fuzz
+  # failure blocking an unrelated pull request teaches people to re-run until
+  # green. On main a crash is a red build somebody owns, and the failing
+  # input is uploaded so it can be committed under testdata/fuzz as a
+  # regression case.
+  fuzz:
+    name: Fuzz
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+      - name: Run every Fuzz target
+        env:
+          FUZZTIME: ${{ inputs.fuzz-time }}
+        run: |
+          set -uo pipefail
+          # `go test -fuzz` takes one package and one target at a time, so
+          # find them from source: `func FuzzX(f *testing.F)` in a _test.go.
+          targets="$(grep -rlE --include='*_test.go' '^func Fuzz[A-Za-z0-9_]*\(' . \
+            | while read -r file; do
+                dir="$(dirname "$file")"
+                grep -oE '^func Fuzz[A-Za-z0-9_]*' "$file" | sed "s|^func |$dir |"
+              done | sort -u)"
+          if [ -z "$targets" ]; then
+            echo "::notice::no Fuzz targets in this repository"
+            exit 0
+          fi
+          echo "$(printf '%s\n' "$targets" | wc -l | tr -d ' ') Fuzz targets, $FUZZTIME each"
+          status=0
+          while read -r dir name; do
+            echo "::group::$dir $name"
+            if ! go test -run '^$' -fuzz "^${name}\$" -fuzztime "$FUZZTIME" "$dir"; then
+              echo "::error::$name in $dir failed; the input is under $dir/testdata/fuzz/$name"
+              status=1
+            fi
+            echo "::endgroup::"
+          done <<<"$targets"
+          exit "$status"
+      - name: Upload failing inputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-failures
+          path: '**/testdata/fuzz/**'
+          retention-days: 30

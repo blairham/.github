@@ -1,0 +1,78 @@
+name: Go image
+
+# Builds a repository's Dockerfile on every change, pushing nothing. The image
+# is published by GoReleaser on a tag (go-release.yml's `images`), so a
+# Dockerfile that stopped building would otherwise first fail after the tag
+# was public. Extracted from kafka-access-controller's `Build image` job; k4a,
+# database-access-controller, localiam and stevedore build the same way.
+#
+#   image:
+#     name: Image
+#     needs: ci
+#     uses: blairham/.github/.github/workflows/go-image.yml@<sha> # main
+#     with:
+#       run: ${{ needs.ci.outputs.code == 'true' }}
+#
+# Gate it with `run`, never with a job-level `if:` in the caller: a skipped
+# caller job reports one check under the caller's name only, so a required
+# `Image / Build image` would sit pending forever on a docs-only change.
+on:
+  workflow_call:
+    inputs:
+      run:
+        description: >-
+          Whether to build. Pass go-ci.yml's `code` output; false reports the
+          check as passed without building.
+        type: boolean
+        default: true
+      context:
+        description: Build context.
+        type: string
+        default: .
+      file:
+        description: Dockerfile path, relative to the repository root.
+        type: string
+        default: Dockerfile
+      targets:
+        description: >-
+          JSON array of build stages to build, one after another (they share
+          the build cache). '[""]' builds the default (last) stage.
+        type: string
+        default: '[""]'
+      platforms:
+        description: Comma-separated platforms, as the release builds them.
+        type: string
+        default: linux/amd64
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: inputs.run
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: inputs.run
+      # Multi-platform builds need emulation for anything but the runner's
+      # own architecture.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        if: inputs.run && contains(inputs.platforms, ',')
+      - name: Build
+        if: inputs.run
+        env:
+          CONTEXT: ${{ inputs.context }}
+          FILE: ${{ inputs.file }}
+          TARGETS: ${{ inputs.targets }}
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          set -euo pipefail
+          jq -r '.[]' <<<"$TARGETS" | while IFS= read -r target; do
+            args=(--platform "$PLATFORMS" --file "$FILE")
+            [ -z "$target" ] || args+=(--target "$target")
+            echo "::group::docker buildx build ${args[*]} $CONTEXT"
+            docker buildx build "${args[@]}" "$CONTEXT"
+            echo "::endgroup::"
+          done

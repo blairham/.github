@@ -1,0 +1,105 @@
+# Pre-commit configuration for [% .Repo %].
+# Install: pre-commit install
+# Run:     pre-commit run --all-files
+# Update:  pre-commit autoupdate
+#
+# Rendered from blairham/.github baseline/pre-commit-config.yaml.tmpl by
+# `make sync`. Edit the baseline (or, with a reason, the override file
+# overrides/[% .Repo %].yml), not this file: the weekly drift check
+# reports any difference. No `repo: local` hooks, ever — upstream hooks with
+# an alias and args instead.
+
+repos:
+  # General hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^dist/
+      - id: end-of-file-fixer
+        exclude: ^dist/
+      - id: check-yaml
+        args: ['--allow-multiple-documents']
+[%- if .HasCharts %]
+        # Helm templates are Go templates until rendered; `helm lint` and the
+        # chart render in CI validate them.
+        exclude: ^charts/[^/]+/templates/
+[%- end %]
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      - id: detect-private-key
+[% if .Knobs.PreCommitGolangciLint %]
+  # golangci-lint via the upstream hooks. Keep `rev` in step with go.mod's
+  # `tool` block.
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.14.0
+    hooks:
+[%- if not .Knobs.PreCommitGofumptCmd %]
+      # Runs the formatters configured in .golangci.yml.
+      - id: golangci-lint-fmt
+[%- end %]
+      # `--new-from-rev HEAD`: reports what you just wrote, not the backlog.
+      - id: golangci-lint
+
+      # The same hook, asked the question a CI runner can answer. On a clean
+      # checkout `--new-from-rev HEAD` compares the tree with an identical
+      # HEAD and reports nothing; `--new-from-merge-base` overrides it.
+      # `--fix=false` overrides the entry's `--fix`: a linter that repairs its
+      # own findings on the runner exits 0 over still-broken committed code,
+      # and pre-commit's "files were modified" net cannot see it because the
+      # hook is `pass_filenames: false`. Manual stage: CI asks for it by name
+      # (blairham/.github go-ci.yml); it never runs on a local commit.
+      - id: golangci-lint
+        alias: golangci-lint-new
+        name: golangci-lint (issues this change introduces)
+        stages: [manual]
+        args: [--new-from-merge-base=origin/main, --fix=false]
+[% end %]
+  # Go housekeeping.
+  - repo: https://github.com/TekWizely/pre-commit-golang
+    rev: v1.0.0-rc.4
+    hooks:
+      - id: go-mod-tidy-repo
+[%- if .Knobs.PreCommitGofumptCmd %]
+
+      # gofumpt alone, run as `go tool` so the version is go.mod's pin, and
+      # reporting rather than rewriting. See overrides/[% .Repo %].yml for why
+      # this replaces `golangci-lint-fmt` here.
+      - id: my-cmd-repo
+        alias: gofumpt
+        name: gofumpt
+        args: [--hook:error-on-output, go, tool, gofumpt, -l, -d, .]
+[%- end %]
+
+  # go.mod and .tool-versions must pin the same Go. check-conflict-markers
+  # replaces upstream's check-merge-conflict, which misses diff3 base markers.
+  - repo: https://github.com/blairham/pre-commit-hooks
+    rev: v0.4.0
+    hooks:
+      # Every .go file carries the two-line SPDX header; a file without one
+      # has no stated license once it is copied out of the repo.
+      - id: check-license-headers
+        args: [--license, Apache-2.0]
+      - id: check-go-version-sync
+      - id: check-conflict-markers
+[%- if .Knobs.PreCommitGoVulncheck %]
+      # Known-vulnerable dependencies fail the commit, not the release.
+      - id: go-vulncheck
+[%- end %]
+
+  # Secret scanning; the rules and any allowlist are in .gitleaks.toml.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+        exclude: ^dist/
+
+  # YAML style (sequence indentation etc.; config in .yamllint.yml)
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        args: ['-c', '.yamllint.yml']
+[%- if .YamllintExclude %]
+        exclude: [% .YamllintExclude %]
+[%- end %]
