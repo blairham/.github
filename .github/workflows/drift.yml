@@ -41,10 +41,13 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
-          go run ./cmd/baseline drift -exit-code \
+          # Built, not `go run`: go run turns every non-zero exit into 1, so
+          # "drift" and "the tool failed" would be the same status.
+          go build -o "$RUNNER_TEMP/baseline" ./cmd/baseline
+          status=0
+          "$RUNNER_TEMP/baseline" drift -exit-code \
             -baseline-sha "$GITHUB_SHA" -run-url "$RUN_URL" \
-            -o "$RUNNER_TEMP/drift.md" -diffs "$RUNNER_TEMP/drift-full.md"
-          status=$?
+            -o "$RUNNER_TEMP/drift.md" -diffs "$RUNNER_TEMP/drift-full.md" || status=$?
           # 0 is clean, 1 is drift; anything else is the tool failing, which
           # must not read as "no drift".
           case "$status" in
