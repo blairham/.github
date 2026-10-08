@@ -132,11 +132,17 @@ func splitLines(b []byte) []string {
 	return lines
 }
 
-// ChangedLines counts the lines a diff adds or removes.
+// ChangedLines counts the lines a diff adds or removes. Only the lines
+// before the first hunk are headers: a removed line that itself starts with
+// "-- " is written "--- …" inside a hunk, and is still a change.
 func ChangedLines(d string) int {
 	n := 0
+	inHunk := false
 	for line := range strings.Lines(d) {
-		if (line[0] == '+' || line[0] == '-') && !strings.HasPrefix(line, "+++ ") && !strings.HasPrefix(line, "--- ") {
+		switch {
+		case strings.HasPrefix(line, "@@ "):
+			inHunk = true
+		case inHunk && (line[0] == '+' || line[0] == '-'):
 			n++
 		}
 	}
