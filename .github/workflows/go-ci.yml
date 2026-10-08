@@ -232,7 +232,9 @@ jobs:
           set -uo pipefail
           # `go test -fuzz` takes one package and one target at a time, so
           # find them from source: `func FuzzX(f *testing.F)` in a _test.go.
-          targets="$(grep -rlE --include='*_test.go' '^func Fuzz[A-Za-z0-9_]*\(' . \
+          # grep exits 1 when nothing matches; that is "no targets", not a
+          # failure, so it must not end the step under `bash -e`.
+          targets="$( { grep -rlE --include='*_test.go' '^func Fuzz[A-Za-z0-9_]*\(' . || true; } \
             | while read -r file; do
                 dir="$(dirname "$file")"
                 grep -oE '^func Fuzz[A-Za-z0-9_]*' "$file" | sed "s|^func |$dir |"
