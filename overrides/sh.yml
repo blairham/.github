@@ -138,3 +138,17 @@ overrides:
       recorded measurement must spell as the shell does; `cancelled` is the
       Agent Client Protocol's spelling of a stopReason (each Go site carries
       //nolint:misspell).
+  - knob: golangci.settings-pending
+    value: [govet.fieldalignment, govet.shadow]
+    reason: >-
+      Staged adoption, one per pull request once the whole tree is clean
+      under it. Counts on 2026-10-08 (sh PR #6350): fieldalignment 1503
+      findings (1054 in tests), shadow 175 (104 in tests).
+    ref: https://github.com/blairham/sh/pull/6350
+  - knob: golangci.settings-off
+    value: [errcheck.check-blank]
+    reason: >-
+      sh's deliberate `_ =` discard idiom (557 sites, all intentional) is the
+      explicit acknowledgement errcheck's default already accepts; complying
+      would mean nolint comments, which is worse. check-type-assertions stays
+      on.

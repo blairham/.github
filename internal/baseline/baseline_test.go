@@ -386,9 +386,14 @@ func TestRenderRefusesKnobsWithNoEffect(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, set := range map[string]func(*Knobs){
-		"govet analyzer not in the baseline": func(k *Knobs) { k.GolangciGovetDisable = []string{"nosuch"} },
-		"formatter not in the baseline":      func(k *Knobs) { k.GolangciFormattersPending = []string{"nosuch"} },
-		"extra linter already in baseline":   func(k *Knobs) { k.GolangciLintersExtra = []ExtraLinter{{Name: "funlen"}} },
+		"govet analyzer not in the baseline": func(k *Knobs) { k.GolangciSettingsOff = []string{"govet.nosuch"} },
+		"errcheck setting not in baseline":   func(k *Knobs) { k.GolangciSettingsPending = []string{"errcheck.nosuch"} },
+		"both pending and off": func(k *Knobs) {
+			k.GolangciSettingsPending = []string{"govet.shadow"}
+			k.GolangciSettingsOff = []string{"govet.shadow"}
+		},
+		"formatter not in the baseline":    func(k *Knobs) { k.GolangciFormattersPending = []string{"nosuch"} },
+		"extra linter already in baseline": func(k *Knobs) { k.GolangciLintersExtra = []ExtraLinter{{Name: "funlen"}} },
 		"docker ignore without a Dockerfile": func(k *Knobs) {
 			k.DependabotDockerIgnore = []DockerIgnore{{DependencyName: "x", UpdateTypes: []string{"version-update:semver-major"}, Reason: "r"}}
 		},
@@ -403,7 +408,7 @@ func TestRenderRefusesKnobsWithNoEffect(t *testing.T) {
 	// The real names render, so the refusals above are about the names.
 	f := facts
 	f.Knobs = DefaultKnobs()
-	f.Knobs.GolangciGovetDisable = []string{"fieldalignment"}
+	f.Knobs.GolangciSettingsOff = []string{"govet.fieldalignment"}
 	f.Knobs.GolangciFormattersPending = []string{"golines"}
 	out, err := Render(root, &f)
 	if err != nil {
@@ -625,5 +630,102 @@ func TestChangesActionPinsAgree(t *testing.T) {
 	}
 	if pins[0] != pins[1] {
 		t.Fatalf("go-ci.yml pins the changes action at %s, go-changes.yml at %s", pins[0], pins[1])
+	}
+}
+
+func TestSettingsKnobsValidate(t *testing.T) {
+	t.Parallel()
+	for name, doc := range map[string]string{
+		"not a setting key": "  - knob: golangci.settings-pending\n    reason: r\n    value: [fieldalignment]\n",
+		"other linter":      "  - knob: golangci.settings-off\n    reason: r\n    value: [gosec.severity]\n",
+		"twice":             "  - knob: golangci.settings-off\n    reason: r\n    value: [govet.shadow, govet.shadow]\n",
+		"empty":             "  - knob: golangci.settings-pending\n    reason: r\n    value: []\n",
+		"old knob is gone":  "  - knob: golangci.govet-disable\n    reason: r\n    value: [fieldalignment]\n",
+	} {
+		ovs, err := ParseOverrides([]byte("overrides:\n" + doc))
+		if err == nil {
+			_, err = ApplyOverrides(ovs)
+		}
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestSettingsRender(t *testing.T) {
+	t.Parallel()
+	groups, err := LoadGroups(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := GatherFacts("sh", memSource{"go.mod": testGoMod}, groups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Knobs = DefaultKnobs()
+	base, err := Render(root, &f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bg := string(base[".golangci.yml"])
+	for _, want := range []string{"        - fieldalignment\n", "        - shadow\n", "      check-blank: true\n", "      check-type-assertions: true\n"} {
+		if !strings.Contains(bg, want) {
+			t.Fatalf("baseline lacks %q; the checks below would prove nothing", want)
+		}
+	}
+	f.Knobs.GolangciSettingsPending = []string{"govet.fieldalignment", "govet.shadow"}
+	f.Knobs.GolangciSettingsOff = []string{"errcheck.check-blank"}
+	out, err := Render(root, &f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gc := string(out[".golangci.yml"])
+	for _, gone := range []string{"        - fieldalignment\n", "        - shadow\n", "      check-blank: true\n"} {
+		if strings.Contains(gc, gone) {
+			t.Errorf("still rendered: %q", gone)
+		}
+	}
+	for _, want := range []string{
+		"        - nilness\n",
+		"      check-type-assertions: true\n",
+		"      check-blank: false # off here: overrides/sh.yml\n",
+		"        # fieldalignment: pending (staged adoption) here — overrides/sh.yml\n",
+		"        # shadow: pending (staged adoption) here — overrides/sh.yml\n",
+	} {
+		if !strings.Contains(gc, want) {
+			t.Errorf("missing %q in:\n%s", want, gc)
+		}
+	}
+}
+
+func TestReportSplitsStagedFromPermanent(t *testing.T) {
+	t.Parallel()
+	ovs, err := ParseOverrides([]byte(`overrides:
+  - knob: golangci.settings-pending
+    value: [govet.fieldalignment, govet.shadow]
+    reason: staged
+  - knob: golangci.linters-pending
+    value: [funlen]
+    reason: staged too
+  - knob: golangci.settings-off
+    value: [errcheck.check-blank]
+    reason: for good
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, permanent := SplitOverrides(ovs)
+	if len(staged) != 2 || len(permanent) != 1 || permanent[0].Knob != "golangci.settings-off" {
+		t.Fatalf("staged=%v permanent=%v", staged, permanent)
+	}
+	r := Report([]*RepoResult{{Repo: "sh", Overrides: ovs}}, "", Targets{Go: "1.26.9"}, "", false)
+	for _, want := range []string{
+		"| sh | 0 | 0 | 0 | 2 | 1 |",
+		"Staged — pending adoption, meant to shrink to empty:\n- `golangci.settings-pending` (2 left: govet.fieldalignment, govet.shadow) — staged",
+		"Permanent exceptions:\n- `golangci.settings-off` — for good",
+	} {
+		if !strings.Contains(r, want) {
+			t.Errorf("report lacks %q:\n%s", want, r)
+		}
 	}
 }

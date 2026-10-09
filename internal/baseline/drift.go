@@ -323,7 +323,8 @@ func Report(results []*RepoResult, baselineSHA string, t Targets, runURL string,
 			"report says nothing about them — not that they drift, not that they are in sync.\n\n", failed, len(results))
 	}
 	sb.WriteString("Files are compared byte for byte with what `make sync` would render; ")
-	sb.WriteString("a known exception is an override in `overrides/<repo>.yml`, listed with its reason.\n")
+	sb.WriteString("an override in `overrides/<repo>.yml` is listed with its reason, as **staged** ")
+	sb.WriteString("(a `-pending` list meant to shrink to empty) or as a **permanent** exception.\n")
 	if runURL != "" {
 		fmt.Fprintf(&sb, "Full diffs: the `drift-report` artifact of [this run](%s).\n", runURL)
 	}
@@ -335,11 +336,13 @@ func Report(results []*RepoResult, baselineSHA string, t Targets, runURL string,
 }
 
 func writeSummaryTable(sb *strings.Builder, results []*RepoResult) {
-	sb.WriteString("\n| Repository | Files drifted | Files missing | Checks failing | Known exceptions |\n")
-	sb.WriteString("|---|---|---|---|---|\n")
+	sb.WriteString(
+		"\n| Repository | Files drifted | Files missing | Checks failing | Staged (pending) | Permanent exceptions |\n",
+	)
+	sb.WriteString("|---|---|---|---|---|---|\n")
 	for _, r := range results {
 		if r.Err != nil {
-			fmt.Fprintf(sb, "| %s | check failed | | | |\n", r.Repo)
+			fmt.Fprintf(sb, "| %s | check failed | | | | |\n", r.Repo)
 			continue
 		}
 		nd, nm, nc := 0, 0, 0
@@ -356,7 +359,8 @@ func writeSummaryTable(sb *strings.Builder, results []*RepoResult) {
 				nc++
 			}
 		}
-		fmt.Fprintf(sb, "| %s | %d | %d | %d | %d |\n", r.Repo, nd, nm, nc, len(r.Overrides))
+		staged, permanent := SplitOverrides(r.Overrides)
+		fmt.Fprintf(sb, "| %s | %d | %d | %d | %d | %d |\n", r.Repo, nd, nm, nc, len(staged), len(permanent))
 	}
 }
 
@@ -387,16 +391,9 @@ func writeRepoSection(sb *strings.Builder, r *RepoResult, diffs bool) {
 		}
 		fmt.Fprintf(sb, "- %s %s — %s\n", mark, c.Name, c.Detail)
 	}
-	if len(r.Overrides) > 0 {
-		sb.WriteString("\nKnown exceptions:\n")
-		for _, o := range r.Overrides {
-			fmt.Fprintf(sb, "- `%s` — %s", o.Knob, strings.TrimSpace(o.Reason))
-			if o.Ref != "" {
-				fmt.Fprintf(sb, " (%s)", o.Ref)
-			}
-			sb.WriteString("\n")
-		}
-	}
+	staged, permanent := SplitOverrides(r.Overrides)
+	writeOverrides(sb, "Staged — pending adoption, meant to shrink to empty", staged)
+	writeOverrides(sb, "Permanent exceptions", permanent)
 	if !diffs {
 		return
 	}
@@ -405,5 +402,43 @@ func writeRepoSection(sb *strings.Builder, r *RepoResult, diffs bool) {
 			fmt.Fprintf(sb, "\n<details><summary><code>%s</code></summary>\n\n```diff\n%s```\n\n</details>\n",
 				f.Path, f.Diff)
 		}
+	}
+}
+
+// IsStaged reports whether a knob records staged adoption — a list that is
+// meant to shrink to empty — rather than a permanent exception. The two are
+// reported apart so a pending list that never shrinks stays visible.
+func IsStaged(knob string) bool { return strings.HasSuffix(knob, "-pending") }
+
+// SplitOverrides separates staged overrides from permanent ones, in order.
+func SplitOverrides(ovs []Override) (staged, permanent []Override) {
+	for _, o := range ovs {
+		if IsStaged(o.Knob) {
+			staged = append(staged, o)
+		} else {
+			permanent = append(permanent, o)
+		}
+	}
+	return staged, permanent
+}
+
+func writeOverrides(sb *strings.Builder, title string, ovs []Override) {
+	if len(ovs) == 0 {
+		return
+	}
+	fmt.Fprintf(sb, "\n%s:\n", title)
+	for _, o := range ovs {
+		fmt.Fprintf(sb, "- `%s`", o.Knob)
+		if IsStaged(o.Knob) {
+			var l []string
+			if err := o.Value.Decode(&l); err == nil {
+				fmt.Fprintf(sb, " (%d left: %s)", len(l), strings.Join(l, ", "))
+			}
+		}
+		fmt.Fprintf(sb, " — %s", strings.TrimSpace(o.Reason))
+		if o.Ref != "" {
+			fmt.Fprintf(sb, " (%s)", o.Ref)
+		}
+		sb.WriteString("\n")
 	}
 }
