@@ -211,6 +211,13 @@ jobs:
           done
           exit "$status"
 
+      # An image whose Dockerfile RUNs anything in its target-platform stage
+      # (ghorg's `apk add`) needs emulation for every architecture but the
+      # runner's own; buildx otherwise fails with `exec format error` after
+      # the GitHub release is already public. Registering binfmt costs a few
+      # seconds and changes nothing for an image that only COPYs.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        if: inputs.images != '[]'
       # The default docker driver cannot push a multi-arch manifest list;
       # without buildx the release fails at its last step, after the GitHub
       # release is already public.
