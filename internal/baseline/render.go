@@ -99,14 +99,32 @@ func renderOne(root string, file File, f *Facts, fm template.FuncMap) ([]byte, e
 		return nil, fmt.Errorf("%s: %w", file.Template, execErr)
 	}
 	b := buf.Bytes()
-	if file.Path != ".golangci.yml" {
-		return b, nil
+	if file.Path == ".golangci.yml" {
+		if b, err = dropPending(b, "linters:", f.Repo, f.Knobs.GolangciLintersPending); err != nil {
+			return nil, err
+		}
+		if b, err = dropPending(b, "formatters:", f.Repo, f.Knobs.GolangciFormattersPending); err != nil {
+			return nil, err
+		}
 	}
-	b, err = dropPending(b, "linters:", f.Repo, f.Knobs.GolangciLintersPending)
-	if err != nil {
-		return nil, err
+	return asFixersLeaveIt(b), nil
+}
+
+// asFixersLeaveIt returns b as the commit hook's trailing-whitespace and
+// end-of-file-fixer would leave it: no trailing spaces or tabs, exactly one
+// final newline. Rendering anything else is a file that can never be
+// committed as rendered — a `|` knob value ends in its own newline, and the
+// template adds another — so drift would flag it forever.
+func asFixersLeaveIt(b []byte) []byte {
+	lines := strings.Split(string(b), "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimRight(l, " \t")
 	}
-	return dropPending(b, "formatters:", f.Repo, f.Knobs.GolangciFormattersPending)
+	s := strings.TrimRight(strings.Join(lines, "\n"), "\n")
+	if s == "" {
+		return nil
+	}
+	return []byte(s + "\n")
 }
 
 // checkKnobsAgainstFacts refuses knobs that would render to nothing for this

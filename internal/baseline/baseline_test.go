@@ -420,3 +420,72 @@ func TestMisspellIgnore(t *testing.T) {
 		t.Fatalf("misspellIgnore = %q, want %q", got, want)
 	}
 }
+
+// fixersWouldLeave is what pre-commit's trailing-whitespace and
+// end-of-file-fixer hooks leave of b: no trailing spaces or tabs on any line,
+// and exactly one final newline (an empty file stays empty).
+func fixersWouldLeave(b []byte) []byte {
+	lines := strings.Split(string(b), "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimRight(l, " \t")
+	}
+	s := strings.TrimRight(strings.Join(lines, "\n"), "\n")
+	if s == "" {
+		return nil
+	}
+	return []byte(s + "\n")
+}
+
+// Every rendered file, for the baseline and for every repository's
+// overrides, must survive the commit hook's whitespace fixers unchanged;
+// otherwise the committed file can never equal the render and drift flags it
+// forever.
+func TestRenderedFilesSurviveWhitespaceFixers(t *testing.T) {
+	t.Parallel()
+	groups, err := LoadGroups(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err := filepath.Glob(filepath.Join(root, "overrides", "*.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repos := make([]string, 0, 1+len(matches))
+	repos = append(repos, "no-overrides")
+	for _, m := range matches {
+		repos = append(repos, strings.TrimSuffix(filepath.Base(m), ".yml"))
+	}
+	if len(repos) < 5 {
+		t.Fatalf("only %d repositories found; the glob is wrong", len(repos))
+	}
+	// A tree with everything a knob can depend on, so every override renders.
+	src := memSource{
+		"go.mod":              testGoMod,
+		"Dockerfile":          "FROM golang:1.26 AS build\n",
+		"charts/x/Chart.yaml": "name: x\n",
+		"config/crd/a.yaml":   "",
+	}
+	for _, repo := range repos {
+		ovs, err := LoadOverrides(root, repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		facts, err := GatherFacts(repo, src, groups)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if facts.Knobs, err = ApplyOverrides(ovs); err != nil {
+			t.Fatal(err)
+		}
+		out, err := Render(root, &facts)
+		if err != nil {
+			t.Fatalf("%s: %v", repo, err)
+		}
+		for path, b := range out {
+			if fixed := fixersWouldLeave(b); string(fixed) != string(b) {
+				t.Errorf("%s %s: the whitespace fixers would change it:\n%s", repo, path,
+					UnifiedDiff("render", "fixed", b, fixed))
+			}
+		}
+	}
+}
