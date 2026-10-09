@@ -5,6 +5,7 @@ owner: blairham
 repos:
   - database-access-controller
   - dockmaster
+  - ghorg
   - go-pre-commit
   - k4a
   - k8s-controller-kit
