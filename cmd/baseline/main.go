@@ -49,15 +49,27 @@ func main() {
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
 	}
-	var exit exitError
-	if errors.As(err, &exit) {
-		os.Exit(int(exit))
+	if code := exitCode(err); code != 0 {
+		var exit exitError
+		if !errors.As(err, &exit) {
+			fmt.Fprintln(os.Stderr, "baseline:", err)
+		}
+		os.Exit(code)
 	}
-	if err != nil {
-		// 2, not 1: `drift -exit-code` uses 1 for "something drifts", and a
-		// failure to look must never read as that or as clean.
-		fmt.Fprintln(os.Stderr, "baseline:", err)
-		os.Exit(2)
+}
+
+// exitCode maps a command's result to the process status: 0 clean, an
+// exitError's own value (drift's 1), and 2 for every other error — a
+// failure to look must never read as drift or as clean.
+func exitCode(err error) int {
+	var exit exitError
+	switch {
+	case err == nil:
+		return 0
+	case errors.As(err, &exit):
+		return int(exit)
+	default:
+		return 2
 	}
 }
 
@@ -184,17 +196,23 @@ func runDrift(args []string) error {
 	if err := writeReports(results, *sha, targets, *runURL, *out, *diffsOut); err != nil {
 		return err
 	}
-	failed := 0
+	drifted, failed := 0, 0
 	for _, r := range results {
-		if r.Err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", r.Repo, r.Err)
-		}
-		if r.Drifted() {
+		switch {
+		case r.Failed():
 			failed++
+			fmt.Fprintf(os.Stderr, "%s: CHECK FAILED: %v\n", r.Repo, r.Err)
+		case r.Drifted():
+			drifted++
 		}
 	}
-	fmt.Fprintf(os.Stderr, "%d of %d repositories drift\n", failed, len(results))
-	if *exitCode && failed > 0 {
+	fmt.Fprintf(os.Stderr, "%d of %d repositories drift\n", drifted, len(results))
+	// A repository that could not be checked fails the run whatever else
+	// happened: exit 2, the tool-error status, never 1 (drift) or 0.
+	if failed > 0 {
+		return fmt.Errorf("%d of %d repositories could not be checked", failed, len(results))
+	}
+	if *exitCode && drifted > 0 {
 		return exitError(1)
 	}
 	return nil

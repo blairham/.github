@@ -38,11 +38,16 @@ type RepoResult struct {
 	Overrides []Override
 }
 
+// Failed reports whether the repository could not be checked at all — a
+// fetch or render error. A failed check says nothing about drift either way.
+func (r *RepoResult) Failed() bool { return r.Err != nil }
+
 // Drifted reports whether anything in the repository departs from the
-// baseline beyond its reasoned overrides.
+// baseline beyond its reasoned overrides. A repository that could not be
+// checked has not drifted; it has Failed.
 func (r *RepoResult) Drifted() bool {
 	if r.Err != nil {
-		return true
+		return false
 	}
 	for _, f := range r.Files {
 		if f.State != stateInSync {
@@ -293,9 +298,12 @@ const (
 func Report(results []*RepoResult, baselineSHA string, t Targets, runURL string, diffs bool) string {
 	pin := t.Pin
 	var sb strings.Builder
-	drifted := 0
+	drifted, failed := 0, 0
 	for _, r := range results {
-		if r.Drifted() {
+		switch {
+		case r.Failed():
+			failed++
+		case r.Drifted():
 			drifted++
 		}
 	}
@@ -310,6 +318,10 @@ func Report(results []*RepoResult, baselineSHA string, t Targets, runURL string,
 	}
 	fmt.Fprintf(&sb, "Baseline: blairham/.github %s; %s; Go %s. **%d of %d** repositories drift from it.\n\n",
 		base, tag, t.Go, drifted, len(results))
+	if failed > 0 {
+		fmt.Fprintf(&sb, "**CHECK FAILED for %d of %d** repositories: they could not be checked, so this "+
+			"report says nothing about them — not that they drift, not that they are in sync.\n\n", failed, len(results))
+	}
 	sb.WriteString("Files are compared byte for byte with what `make sync` would render; ")
 	sb.WriteString("a known exception is an override in `overrides/<repo>.yml`, listed with its reason.\n")
 	if runURL != "" {
@@ -327,7 +339,7 @@ func writeSummaryTable(sb *strings.Builder, results []*RepoResult) {
 	sb.WriteString("|---|---|---|---|---|\n")
 	for _, r := range results {
 		if r.Err != nil {
-			fmt.Fprintf(sb, "| %s | error | | | |\n", r.Repo)
+			fmt.Fprintf(sb, "| %s | check failed | | | |\n", r.Repo)
 			continue
 		}
 		nd, nm, nc := 0, 0, 0
@@ -355,7 +367,7 @@ func writeRepoSection(sb *strings.Builder, r *RepoResult, diffs bool) {
 	}
 	sb.WriteString("\n\n")
 	if r.Err != nil {
-		fmt.Fprintf(sb, "**Error:** %v\n", r.Err)
+		fmt.Fprintf(sb, "**CHECK FAILED** (not drift): %v\n", r.Err)
 		return
 	}
 	for _, f := range r.Files {
