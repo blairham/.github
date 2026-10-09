@@ -87,6 +87,14 @@ have) is refused. Every
 departure must be approved by Blair before it is encoded — a new override is a
 decision, not a fix.
 
+**Drift's GitHub reads** authenticate with `GH_TOKEN`, then `GITHUB_TOKEN`,
+then `gh auth token`; with none of them it warns and reads unauthenticated
+(60 requests an hour per IP, shared by everything on the machine). A
+repository it cannot read — a 403, a rate limit, a network error — is
+reported as **CHECK FAILED**, never as drift, and the run exits 2. Exit
+status: 0 nothing drifts, 1 drift (with `-exit-code`), 2 the tool could not
+look.
+
 Structural checks `drift` also runs: go.mod `go` and `.tool-versions`
 `golang` both equal the **latest published patch** of `GoMinor` (1.26),
 read from https://go.dev/dl/?mode=json on every run, and equal each other — the

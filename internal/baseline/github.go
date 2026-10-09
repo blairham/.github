@@ -12,10 +12,46 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 )
+
+// APIBase is the GitHub REST API root; tests point it at a local server.
+var APIBase = "https://api.github.com"
+
+var (
+	tokenOnce sync.Once
+	token     string
+)
+
+// Token is the credential for API reads: GH_TOKEN, then GITHUB_TOKEN, then
+// `gh auth token`. Without one, reads are unauthenticated and share a
+// 60-an-hour budget with everything else on the machine — enough for a few
+// repositories at most — so that is warned about, once, rather than left to
+// surface as a 403 halfway through a run.
+func Token() string {
+	tokenOnce.Do(func() {
+		for _, env := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
+			if token = os.Getenv(env); token != "" {
+				return
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "gh", "auth", "token").Output()
+		if token = strings.TrimSpace(string(out)); err == nil && token != "" {
+			return
+		}
+		token = ""
+		fmt.Fprintln(os.Stderr, "baseline: warning: no GH_TOKEN, GITHUB_TOKEN or `gh auth token`;"+
+			" GitHub API reads are unauthenticated (60 an hour per IP)")
+	})
+	return token
+}
 
 // GitHubSource is a repository's default branch, read through the REST API.
 // Every read is pinned to one commit, so a report describes a single tree
@@ -31,19 +67,15 @@ type GitHubSource struct {
 	paths  []string
 }
 
-// NewGitHubSource resolves the default branch's head commit. The token comes
-// from GH_TOKEN or GITHUB_TOKEN; unauthenticated reads work but are limited
-// to 60 requests an hour.
+// NewGitHubSource resolves the default branch's head commit, authenticating
+// with Token().
 func NewGitHubSource(ctx context.Context, owner, repo string) (*GitHubSource, error) {
 	g := &GitHubSource{
 		Owner:  owner,
 		Repo:   repo,
 		client: &http.Client{Timeout: 30 * time.Second},
 		files:  map[string][]byte{},
-		token:  os.Getenv("GH_TOKEN"),
-	}
-	if g.token == "" {
-		g.token = os.Getenv("GITHUB_TOKEN")
+		token:  Token(),
 	}
 	var meta struct {
 		DefaultBranch string `json:"default_branch"`
@@ -138,7 +170,7 @@ func (g *GitHubSource) getJSON(ctx context.Context, path string, v any) error {
 }
 
 func (g *GitHubSource) get(ctx context.Context, path, accept string) (body []byte, err error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com"+path, http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, APIBase+path, http.NoBody)
 	if err != nil {
 		return nil, err
 	}
@@ -171,10 +203,7 @@ func (g *GitHubSource) get(ctx context.Context, path, accept string) (body []byt
 func LatestTag(ctx context.Context, owner, repo string) (Pin, error) {
 	g := &GitHubSource{
 		client: &http.Client{Timeout: 30 * time.Second},
-		token:  os.Getenv("GH_TOKEN"),
-	}
-	if g.token == "" {
-		g.token = os.Getenv("GITHUB_TOKEN")
+		token:  Token(),
 	}
 	var tags []struct {
 		Name   string `json:"name"`

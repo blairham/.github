@@ -46,7 +46,7 @@ sync: ## Render the baseline into DIR for REPO.
 
 .PHONY: drift
 drift: ## Compare every repository's main with the baseline; full diffs in drift-full.md.
-	GH_TOKEN="$${GH_TOKEN:-$$(gh auth token)}" $(GO) run ./cmd/baseline drift \
+	$(GO) run ./cmd/baseline drift \
 		-baseline-sha "$$(git rev-parse origin/main 2>/dev/null)" -o drift.md -diffs drift-full.md
 	@cat drift.md
 
