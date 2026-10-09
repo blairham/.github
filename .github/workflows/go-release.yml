@@ -36,6 +36,37 @@ name: Go release
 #   id-token: write      keyless cosign and the provenance attestation
 #   attestations: write  the attestation store
 #   packages: write      only with `images`
+# A snapshot (`snapshot: true`) needs only `contents: read`: it signs,
+# attests, logs in and publishes nothing, and its secrets are withheld from
+# GoReleaser even if passed.
+#
+# A snapshot hands its result to the caller: dist/ — artifacts.json, the
+# archives, a generated Homebrew formula — is uploaded as a workflow artifact
+# (output `snapshot-artifact`), with every Docker image the render built
+# saved into it as docker-images.tar. A caller's checks run downstream:
+#
+#   render:
+#     name: Render a release
+#     needs: changes
+#     permissions:
+#       contents: read
+#     uses: blairham/.github/.github/workflows/go-release.yml@<sha> # vX.Y.Z
+#     with:
+#       snapshot: true
+#       test-command: ''          # CI already ran the tests
+#       release-notes: generated  # if there is no CHANGELOG.md
+#   render-checks:
+#     needs: render
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/download-artifact@<sha> # vX
+#         with: {name: '${{ needs.render.outputs.snapshot-artifact }}', path: dist}
+#       - run: docker load -i dist/docker-images.tar   # when the render built images
+#       - run: jq . dist/artifacts.json ...
+#
+# The render job itself cannot be gated on a change filter from the caller
+# (a reusable call is gated only by a job-level `if:`); keep it out of the
+# required checks, or let it run on every change.
 on:
   workflow_call:
     inputs:
@@ -78,6 +109,26 @@ on:
           by a real tag.
         type: boolean
         default: false
+      goreleaser-config:
+        description: GoReleaser config path; empty uses GoReleaser's default lookup (.goreleaser.yaml).
+        type: string
+        default: ''
+      snapshot-artifact:
+        description: Name of the workflow artifact a snapshot uploads dist/ as.
+        type: string
+        default: release-snapshot
+      snapshot-retention-days:
+        description: Days the snapshot artifact is kept.
+        type: number
+        default: 3
+      snapshot-save-images:
+        description: >-
+          Save every Docker image the snapshot built into
+          dist/docker-images.tar, so a downstream job can `docker load` and
+          run them. A snapshot builds one architecture at a time and
+          `--load`s each into this job's daemon, which is gone when it ends.
+        type: boolean
+        default: true
     secrets:
       HOMEBREW_TAP_TOKEN:
         description: Fine-grained token with contents:write on blairham/homebrew-tap, for a `brews:` formula.
@@ -101,6 +152,9 @@ on:
       digests:
         description: JSON object mapping each image in `images` to its pushed index digest.
         value: ${{ jobs.release.outputs.digests }}
+      snapshot-artifact:
+        description: The workflow artifact holding a snapshot's dist/ (empty when not a snapshot).
+        value: ${{ jobs.release.outputs.snapshot-artifact }}
 
 jobs:
   release:
@@ -108,6 +162,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       digests: ${{ steps.images.outputs.digests }}
+      snapshot-artifact: ${{ steps.snapshot.outputs.name }}
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
       SNAPSHOT: ${{ inputs.snapshot }}
@@ -155,6 +210,9 @@ jobs:
       # The tag should only ever point at a commit CI already passed, but a
       # release is the one place a second look costs nothing that matters.
       - name: Run tests
+        # An empty test-command skips this: a snapshot rendered beside CI's
+        # own test job need not run the suite twice.
+        if: inputs.test-command != ''
         env:
           CMD: ${{ inputs.test-command }}
         run: eval "$CMD"
@@ -243,17 +301,22 @@ jobs:
           # for an OIDC token a dry run should not use.
           args: >-
             release --clean
+            ${{ inputs.goreleaser-config != '' && format('--config {0}', inputs.goreleaser-config) || '' }}
             ${{ inputs.snapshot && '--snapshot --skip=publish,sign' || steps.notes.outputs.args }}
+        # A snapshot gets no secrets at all, whatever the caller passed: the
+        # tap token is the one thing here that writes to another repository,
+        # and a render must not be able to reach it even if both skip guards
+        # were wrong.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ !inputs.snapshot && secrets.HOMEBREW_TAP_TOKEN || '' }}
           # The notarize block in .goreleaser.yaml self-disables when
           # MACOS_SIGN_P12 is unset, so releases work without these.
-          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
-          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
-          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
-          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_SIGN_P12: ${{ !inputs.snapshot && secrets.MACOS_SIGN_P12 || '' }}
+          MACOS_SIGN_PASSWORD: ${{ !inputs.snapshot && secrets.MACOS_SIGN_PASSWORD || '' }}
+          MACOS_NOTARY_ISSUER_ID: ${{ !inputs.snapshot && secrets.MACOS_NOTARY_ISSUER_ID || '' }}
+          MACOS_NOTARY_KEY_ID: ${{ !inputs.snapshot && secrets.MACOS_NOTARY_KEY_ID || '' }}
+          MACOS_NOTARY_KEY: ${{ !inputs.snapshot && secrets.MACOS_NOTARY_KEY || '' }}
 
       - name: Show what was built
         run: |
@@ -261,6 +324,41 @@ jobs:
           ls -l dist/
           test -s dist/checksums.txt || { echo "::error::GoReleaser wrote no checksums.txt"; exit 1; }
           cat dist/checksums.txt
+
+      # Every image the render built, by the tag artifacts.json records, into
+      # one tarball beside the rest of dist/. None built is fine (a library or
+      # a CLI without images); one that artifacts.json names but the daemon
+      # does not have is not.
+      - name: Save the snapshot's images
+        if: inputs.snapshot && inputs.snapshot-save-images
+        run: |
+          set -euo pipefail
+          mapfile -t refs < <(jq -r '.[] | select(.type == "Docker Image") | .name' dist/artifacts.json | sort -u)
+          if [ "${#refs[@]}" -eq 0 ]; then
+            echo "no Docker images in this render"
+            exit 0
+          fi
+          for ref in "${refs[@]}"; do
+            docker image inspect "$ref" >/dev/null || { echo "::error::artifacts.json names $ref, which the daemon does not have"; exit 1; }
+          done
+          docker save -o dist/docker-images.tar "${refs[@]}"
+          echo "saved ${#refs[@]} image tags to dist/docker-images.tar ($(du -h dist/docker-images.tar | cut -f1))"
+
+      - name: Upload the snapshot
+        id: snapshot-upload
+        if: inputs.snapshot
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.snapshot-artifact }}
+          path: dist/
+          retention-days: ${{ inputs.snapshot-retention-days }}
+          if-no-files-found: error
+      - name: Name the snapshot artifact
+        id: snapshot
+        if: inputs.snapshot
+        env:
+          NAME: ${{ inputs.snapshot-artifact }}
+        run: echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
       # SLSA build provenance for every file checksums.txt lists. A
       # SHA-pinned step, not slsa-github-generator's reusable workflow, which

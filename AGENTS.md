@@ -18,6 +18,13 @@ public Go repositories (the list is `repos.yml`). Two things live here:
      `checksums.txt`, `actions/attest-build-provenance`, the bundle attached
      as `<repo>-<tag>.intoto.jsonl`, optional image provenance; `snapshot`
      input for a dry run.
+     Snapshot mode needs only `contents: read`, withholds every secret
+     from GoReleaser, and uploads dist/ (plus `docker-images.tar` of every
+     image it built) as a workflow artifact, output `snapshot-artifact`, so
+     a caller's own release checks run in a downstream job. That is the only
+     sanctioned way to run GoReleaser outside release.yml: drift still flags
+     any other workflow that uses goreleaser-action. This repository's CI
+     proves it against `internal/testdata/release/`.
    - `.github/workflows/go-changes.yml` — change detection alone, outputs
      `code` and `matches` (named regex filters), so repository-specific jobs
      can `needs: changes` and start without waiting for all of go-ci.
