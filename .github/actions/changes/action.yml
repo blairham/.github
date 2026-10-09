@@ -1,0 +1,32 @@
+name: Detect changed files
+description: >-
+  Whether a change touches code (anything but prose) and which named filters
+  it matches. The one implementation behind go-ci.yml's `Detect changed files`
+  job and go-changes.yml.
+inputs:
+  filters:
+    description: >-
+      JSON object of name -> list of extended regexes (grep -E) over the
+      changed paths, e.g. '{"kafka": ["^internal/kafka/", "^hack/kafka"]}'.
+    required: false
+    default: '{}'
+outputs:
+  code:
+    description: "'true' when anything but prose changed, or when this is not a pull request."
+    value: ${{ steps.filter.outputs.code }}
+  matches:
+    description: JSON object of filter name -> "true"/"false"; every filter is "true" outside a pull request.
+    value: ${{ steps.filter.outputs.matches }}
+runs:
+  using: composite
+  steps:
+    # The caller checks out with fetch-depth: 0; without the base commit the
+    # answer is "everything changed".
+    - id: filter
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        # On a push there is no pull request; `before` is the previous head.
+        BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        FILTERS: ${{ inputs.filters }}
+      run: '"$GITHUB_ACTION_PATH/changes.sh"'
