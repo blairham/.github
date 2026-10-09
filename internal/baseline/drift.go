@@ -69,6 +69,10 @@ var (
 	goCIRef = regexp.MustCompile(
 		`uses:\s*blairham/\.github/\.github/workflows/go-ci\.yml@([0-9a-f]{40})(?:[ \t]+#[ \t]*(\S+))?`,
 	)
+	goChangesRef = regexp.MustCompile(
+		`uses:\s*blairham/\.github/\.github/workflows/go-changes\.yml@([0-9a-f]{40})(?:[ \t]+#[ \t]*(\S+))?`,
+	)
+	goChangesAny = regexp.MustCompile(`blairham/\.github/\.github/workflows/go-changes\.yml@`)
 	goReleaseRef = regexp.MustCompile(
 		`uses:\s*blairham/\.github/\.github/workflows/go-release\.yml@([0-9a-f]{40})(?:[ \t]+#[ \t]*(\S+))?`,
 	)
@@ -175,6 +179,7 @@ func structuralChecks(src Source, knobs *Knobs, t Targets) []Check {
 		pinCheck("ci.yml calls go-ci.yml", read(".github/workflows/ci.yml"), goCIRef, t.Pin),
 		pinCheck("release.yml calls go-release.yml", read(".github/workflows/release.yml"), goReleaseRef, t.Pin),
 		strayReleaseCheck(src, read),
+		optionalChangesCheck(src, read, t.Pin),
 	}
 
 	_, err := src.ReadFile("CHANGELOG.md")
@@ -207,6 +212,37 @@ func strayReleaseCheck(src Source, read func(string) string) Check {
 		}
 	}
 	return Check{Name: name, OK: len(stray) == 0, Detail: orNone(strings.Join(stray, ", "))}
+}
+
+// optionalChangesCheck accepts a repository that does not call go-changes.yml
+// at all, and holds every call it does make to the same pin rule as go-ci.
+func optionalChangesCheck(src Source, read func(string) string, pin Pin) Check {
+	const name = "go-changes.yml calls (if any) are pinned"
+	paths, err := src.Paths()
+	if err != nil {
+		return Check{Name: name, Detail: err.Error()}
+	}
+	used := 0
+	for _, p := range paths {
+		if !strings.HasPrefix(p, ".github/workflows/") {
+			continue
+		}
+		content := read(p)
+		for _, line := range strings.Split(content, "\n") {
+			if !goChangesAny.MatchString(line) {
+				continue
+			}
+			used++
+			if c := pinCheck(name, line, goChangesRef, pin); !c.OK {
+				c.Detail = p + ": " + c.Detail
+				return c
+			}
+		}
+	}
+	if used == 0 {
+		return Check{Name: name, OK: true, Detail: "not used"}
+	}
+	return Check{Name: name, OK: true, Detail: fmt.Sprintf("%d call(s), pinned like go-ci.yml", used)}
 }
 
 func pinCheck(name, content string, re *regexp.Regexp, pin Pin) Check {
