@@ -108,3 +108,53 @@ jobs:
             echo "::error::'never' matched on a pull request"
             exit 1
           fi
+
+  # go-release.yml's snapshot path, by local path, from a job granted only
+  # `contents: read` — exactly what a caller's render job has — against a
+  # fixture config that builds a binary, an archive, a Homebrew formula and
+  # an image. render-checks then consumes the artifact the way sh's
+  # formula and image checks do, so a snapshot that stops handing over dist/
+  # (or its images) fails here first.
+  render:
+    name: Render a release
+    permissions:
+      contents: read
+    uses: ./.github/workflows/go-release.yml
+    with:
+      snapshot: true
+      goreleaser-config: internal/testdata/release/goreleaser.yaml
+      test-command: ''
+      release-notes: generated
+      snapshot-artifact: release-snapshot-fixture
+      snapshot-retention-days: 1
+
+  render-checks:
+    name: Render checks
+    needs: render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.render.outputs.snapshot-artifact }}
+          path: dist
+      - name: The artifact carries what the render built
+        env:
+          ARTIFACT: ${{ needs.render.outputs.snapshot-artifact }}
+        run: |
+          set -euo pipefail
+          [ "$ARTIFACT" = release-snapshot-fixture ] || { echo "::error::output snapshot-artifact is '$ARTIFACT'"; exit 1; }
+          ls -l dist dist/homebrew/Formula
+          for kind in Binary Archive Checksum "Homebrew Formula" "Docker Image"; do
+            n="$(jq --arg k "$kind" '[.[] | select(.type == $k)] | length' dist/artifacts.json)"
+            echo "$kind: $n"
+            [ "$n" -ge 1 ] || { echo "::error::artifacts.json lists no $kind"; exit 1; }
+          done
+          grep -q 'bin.install "baseline"' dist/homebrew/Formula/baseline-fixture.rb
+          test -s dist/docker-images.tar
+      - name: The image loads and runs
+        run: |
+          set -euo pipefail
+          docker load -i dist/docker-images.tar
+          ref="$(jq -r '.[] | select(.type == "Docker Image") | .name' dist/artifacts.json | head -1)"
+          docker run --rm "$ref" knobs | tee knobs.txt
+          grep -q '^golangci.settings-pending ' knobs.txt

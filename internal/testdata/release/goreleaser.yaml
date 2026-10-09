@@ -1,0 +1,46 @@
+# A release fixture for this repository's own CI, which runs go-release.yml
+# in snapshot mode against it to prove the snapshot artifact: one binary, an
+# archive, a generated Homebrew formula and one image, so the downstream job
+# has every kind of thing a real caller checks. Nothing here is ever
+# published — this repository has no release.
+version: 2
+
+project_name: baseline
+
+builds:
+  - id: baseline
+    main: ./cmd/baseline
+    binary: baseline
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64]
+
+archives:
+  - id: baseline
+
+checksum:
+  name_template: checksums.txt
+
+# Written to dist/homebrew/ in a snapshot; never uploaded.
+brews:
+  - name: baseline-fixture
+    repository:
+      owner: blairham
+      name: homebrew-tap
+    directory: Formula
+    skip_upload: true
+    install: |
+      bin.install "baseline"
+
+dockers_v2:
+  - id: fixture
+    ids: [baseline]
+    images: ['ghcr.io/blairham/dotgithub-fixture']
+    dockerfile: internal/testdata/release/Dockerfile
+    platforms: [linux/amd64]
+    sbom: false
+    tags: ['{{ .Version }}']
+
+changelog:
+  disable: false
