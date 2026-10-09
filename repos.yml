@@ -6,6 +6,7 @@ repos:
   - database-access-controller
   - dockmaster
   - ghorg
+  - go-claude-swap
   - go-pre-commit
   - k4a
   - k8s-controller-kit
