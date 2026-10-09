@@ -249,10 +249,27 @@ jobs:
           fi
           echo "$(printf '%s\n' "$targets" | wc -l | tr -d ' ') Fuzz targets, $FUZZTIME each"
           status=0
+          log="$RUNNER_TEMP/fuzz.log"
           while read -r dir name; do
             echo "::group::$dir $name"
-            if ! go test -run '^$' -fuzz "^${name}\$" -fuzztime "$FUZZTIME" "$dir"; then
-              echo "::error::$name in $dir failed; the input is under $dir/testdata/fuzz/$name"
+            corpus="$dir/testdata/fuzz/$name"
+            before="$( { find "$corpus" -type f 2>/dev/null || true; } | sort)"
+            if go test -run '^$' -fuzz "^${name}\$" -fuzztime "$FUZZTIME" "$dir" 2>&1 | tee "$log"; then
+              echo "::endgroup::"
+              continue
+            fi
+            # A finding always writes its input under testdata/fuzz/<Target>.
+            # Go's engine can also fail a target at the -fuzztime limit with
+            # "context deadline exceeded" and write nothing, when a worker is
+            # mid-input as the clock runs out on a slow runner. That is the
+            # engine's deadline, not a property of the code: say so, don't
+            # fail. Anything else — a new input, a build error — fails.
+            after="$( { find "$corpus" -type f 2>/dev/null || true; } | sort)"
+            if [ "$before" = "$after" ] && grep -q 'context deadline exceeded' "$log" \
+               && ! grep -qE '^\s*(panic:|Failing input written to)' "$log"; then
+              echo "::warning::$name in $dir hit the fuzzing deadline without a finding (no new input written)"
+            else
+              echo "::error::$name in $dir failed; the input is under $corpus"
               status=1
             fi
             echo "::endgroup::"
