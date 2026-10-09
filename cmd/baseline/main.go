@@ -141,6 +141,7 @@ func runDrift(args []string) error {
 	diffsOut := fs.String("diffs", "", "also write the report with every diff here")
 	sha := fs.String("baseline-sha", "", "blairham/.github commit this report describes (for the header)")
 	pinRepo := fs.String("pin-repo", "blairham/.github", "repository whose latest vX.Y.Z tag callers must pin")
+	goURL := fs.String("go-releases", baseline.GoDownloadsURL, "Go release list (JSON) the latest patch is read from")
 	runURL := fs.String("run-url", "", "link to the workflow run, for the report")
 	only := fs.String("repo", "", "check just this repository")
 	exitCode := fs.Bool("exit-code", false, "exit 1 when anything drifts")
@@ -164,6 +165,13 @@ func runDrift(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Without the latest Go patch every Go check would be guesswork; fail
+	// the run (exit 2) rather than report on it.
+	goLatest, err := baseline.LatestGoPatch(ctx, *goURL, baseline.GoMinor)
+	if err != nil {
+		return err
+	}
+	targets := baseline.Targets{Pin: pin, Go: goLatest}
 	results := make([]*baseline.RepoResult, 0, len(rf.Repos))
 	for _, repo := range rf.Repos {
 		src, srcErr := baseline.NewGitHubSource(ctx, rf.Owner, repo)
@@ -171,9 +179,9 @@ func runDrift(args []string) error {
 			results = append(results, &baseline.RepoResult{Repo: repo, Err: srcErr})
 			continue
 		}
-		results = append(results, baseline.CheckRepo(*root, repo, src, groups, pin))
+		results = append(results, baseline.CheckRepo(*root, repo, src, groups, targets))
 	}
-	if err := writeReports(results, *sha, pin, *runURL, *out, *diffsOut); err != nil {
+	if err := writeReports(results, *sha, targets, *runURL, *out, *diffsOut); err != nil {
 		return err
 	}
 	failed := 0
@@ -214,8 +222,8 @@ func loadRepos(root, only string) (reposFile, error) {
 	return rf, nil
 }
 
-func writeReports(results []*baseline.RepoResult, sha string, pin baseline.Pin, runURL, out, diffsOut string) error {
-	summary := baseline.Report(results, sha, pin, runURL, false)
+func writeReports(results []*baseline.RepoResult, sha string, t baseline.Targets, runURL, out, diffsOut string) error {
+	summary := baseline.Report(results, sha, t, runURL, false)
 	if out == "" {
 		fmt.Print(summary)
 	} else if err := os.WriteFile(out, []byte(summary), 0o600); err != nil {
@@ -224,7 +232,7 @@ func writeReports(results []*baseline.RepoResult, sha string, pin baseline.Pin, 
 	if diffsOut == "" {
 		return nil
 	}
-	return os.WriteFile(diffsOut, []byte(baseline.Report(results, sha, pin, runURL, true)), 0o600)
+	return os.WriteFile(diffsOut, []byte(baseline.Report(results, sha, t, runURL, true)), 0o600)
 }
 
 func runOverrides(args []string) error {

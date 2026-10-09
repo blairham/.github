@@ -3,4 +3,4 @@
 #
 # ONE golang pin per repo, at the root. The shared `check-go-version-sync`
 # hook enforces it equals go.mod's `go` directive; move the two together.
-golang 1.26.8
+golang 1.26.9

@@ -17,9 +17,12 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// GoVersion is the toolchain every repository pins, in go.mod's `go`
-// directive and .tool-versions' golang line alike.
-const GoVersion = "1.26.8"
+// GoMinor is the Go line every repository is on. The patch is not pinned
+// here: drift requires the latest published GoMinor.x (LatestGoPatch), in
+// go.mod's `go` directive and .tool-versions' golang line alike, because a
+// patch release is how the standard library's vulnerabilities get fixed and
+// a hard-coded patch goes stale the month it is written.
+const GoMinor = "1.26"
 
 // Source is a repository's tree: a local checkout for `sync`, the default
 // branch on GitHub for `drift`.

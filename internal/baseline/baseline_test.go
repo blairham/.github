@@ -4,7 +4,10 @@
 package baseline
 
 import (
+	"context"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -286,7 +289,7 @@ func TestStructuralChecks(t *testing.T) {
 		"CHANGELOG.md":                  "# Changelog\n",
 	}
 	knobs := DefaultKnobs()
-	for _, c := range structuralChecks(good, &knobs, pin) {
+	for _, c := range structuralChecks(good, &knobs, Targets{Pin: pin, Go: "1.26.8"}) {
 		if !c.OK {
 			t.Errorf("good tree failed %s: %s", c.Name, c.Detail)
 		}
@@ -298,13 +301,14 @@ func TestStructuralChecks(t *testing.T) {
 		".github/workflows/goreleaser.yml": "uses: goreleaser/goreleaser-action@x\n",
 	}
 	failed := 0
-	for _, c := range structuralChecks(bad, &knobs, pin) {
+	for _, c := range structuralChecks(bad, &knobs, Targets{Pin: pin, Go: "1.26.8"}) {
 		if !c.OK {
 			failed++
 		}
 	}
+	// go.mod and .tool-versions agree (both 1.26.6), so 6 of the 7 fail.
 	if failed != 6 {
-		t.Errorf("bad tree failed %d checks, want all 6", failed)
+		t.Errorf("bad tree failed %d checks, want 6", failed)
 	}
 }
 
@@ -487,5 +491,89 @@ func TestRenderedFilesSurviveWhitespaceFixers(t *testing.T) {
 					UnifiedDiff("render", "fixed", b, fixed))
 			}
 		}
+	}
+}
+
+const goReleases = `[
+  {"version": "go1.27.2", "stable": true},
+  {"version": "go1.26.9", "stable": true},
+  {"version": "go1.26.10rc1", "stable": false},
+  {"version": "go1.26.8", "stable": true}
+]`
+
+func TestLatestPatch(t *testing.T) {
+	t.Parallel()
+	got, err := latestPatch([]byte(goReleases), "1.26")
+	if err != nil || got != "1.26.9" {
+		t.Fatalf("latestPatch = %q, %v; want 1.26.9 (numeric, stable only, not 1.27)", got, err)
+	}
+	for name, body := range map[string]string{
+		"minor out of support": `[{"version": "go1.27.2", "stable": true}]`,
+		"only unstable":        `[{"version": "go1.26.10rc1", "stable": false}]`,
+		"not json":             `<html>`,
+		"empty":                `[]`,
+	} {
+		if v, err := latestPatch([]byte(body), "1.26"); err == nil {
+			t.Errorf("%s: got %q, want an error", name, v)
+		}
+	}
+}
+
+func TestLatestGoPatchFailsLoudly(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ok" {
+			_, _ = w.Write([]byte(goReleases))
+			return
+		}
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	ctx := context.Background()
+	if v, err := LatestGoPatch(ctx, srv.URL+"/ok", "1.26"); err != nil || v != "1.26.9" {
+		t.Fatalf("ok server: %q, %v", v, err)
+	}
+	if v, err := LatestGoPatch(ctx, srv.URL+"/down", "1.26"); err == nil {
+		t.Fatalf("a 503 produced %q, not an error", v)
+	}
+}
+
+// With 1.26.9 the latest, a tree on 1.26.8 drifts and one on 1.26.9 does not;
+// with no known latest, nothing passes.
+func TestGoChecksRequireLatestPatch(t *testing.T) {
+	t.Parallel()
+	tree := func(v string) memSource {
+		return memSource{
+			"go.mod":         strings.Replace(testGoMod, "go 1.26.8", "go "+v, 1),
+			".tool-versions": "golang " + v + "\n",
+		}
+	}
+	goOK := func(src memSource, target string) (directive, tool, agree bool) {
+		knobs := DefaultKnobs()
+		for _, c := range structuralChecks(src, &knobs, Targets{Go: target}) {
+			switch c.Name {
+			case "go.mod go directive":
+				directive = c.OK
+			case ".tool-versions golang":
+				tool = c.OK
+			case "go.mod and .tool-versions agree":
+				agree = c.OK
+			}
+		}
+		return directive, tool, agree
+	}
+	if d, tv, a := goOK(tree("1.26.8"), "1.26.9"); d || tv || !a {
+		t.Errorf("1.26.8 with 1.26.9 latest: directive=%v tool=%v agree=%v, want false false true", d, tv, a)
+	}
+	if d, tv, a := goOK(tree("1.26.9"), "1.26.9"); !d || !tv || !a {
+		t.Errorf("1.26.9 with 1.26.9 latest: directive=%v tool=%v agree=%v, want all true", d, tv, a)
+	}
+	if d, tv, _ := goOK(tree("1.26.9"), ""); d || tv {
+		t.Error("with no known latest patch, a Go check passed")
+	}
+	mixed := tree("1.26.9")
+	mixed[".tool-versions"] = "golang 1.26.8\n"
+	if _, _, a := goOK(mixed, "1.26.9"); a {
+		t.Error("go.mod 1.26.9 and .tool-versions 1.26.8 reported as agreeing")
 	}
 }
