@@ -74,6 +74,16 @@ var (
 	)
 )
 
+// Targets are what a repository must match that is not a rendered file:
+// the latest blairham/.github tag for its workflow pins, and the latest
+// published Go patch on GoMinor.
+type Targets struct {
+	Pin Pin
+	// Go is the latest published GoMinor.x, e.g. "1.26.9". Empty fails
+	// every Go check: a target that could not be found must not pass.
+	Go string
+}
+
 // Pin is the blairham/.github release callers must pin: its latest tag and
 // the commit that tag names. A zero Pin means there is no tag to compare
 // against, and any full-SHA pin passes.
@@ -85,7 +95,7 @@ type Pin struct {
 // CheckRepo compares one repository's tree with the rendered baseline. A
 // reusable-workflow pin is in sync only at pin.SHA with a `# pin.Tag`
 // comment; an older pin is drift, which dependabot's bump resolves.
-func CheckRepo(root, repo string, src Source, groups []Group, pin Pin) *RepoResult {
+func CheckRepo(root, repo string, src Source, groups []Group, t Targets) *RepoResult {
 	r := &RepoResult{Repo: repo}
 	if gs, ok := src.(*GitHubSource); ok {
 		r.Commit = gs.Commit
@@ -130,11 +140,11 @@ func CheckRepo(root, repo string, src Source, groups []Group, pin Pin) *RepoResu
 		}
 		r.Files = append(r.Files, res)
 	}
-	r.Checks = structuralChecks(src, &knobs, pin)
+	r.Checks = structuralChecks(src, &knobs, t)
 	return r
 }
 
-func structuralChecks(src Source, knobs *Knobs, pin Pin) []Check {
+func structuralChecks(src Source, knobs *Knobs, t Targets) []Check {
 	read := func(p string) string {
 		b, err := src.ReadFile(p)
 		if err != nil {
@@ -145,17 +155,25 @@ func structuralChecks(src Source, knobs *Knobs, pin Pin) []Check {
 
 	goDirective := GoDirective([]byte(read("go.mod")))
 	toolVersions := ToolVersionsGolang([]byte(read(".tool-versions")))
+	want := t.Go
+	if want == "" {
+		want = "unknown — the latest Go " + GoMinor + ".x could not be determined"
+	}
 	checks := []Check{
 		{
-			Name: "go.mod go directive", OK: goDirective == GoVersion,
-			Detail: fmt.Sprintf("%s (baseline %s)", orNone(goDirective), GoVersion),
+			Name: "go.mod go directive", OK: t.Go != "" && goDirective == t.Go,
+			Detail: fmt.Sprintf("%s (latest Go %s.x is %s)", orNone(goDirective), GoMinor, want),
 		},
 		{
-			Name: ".tool-versions golang", OK: toolVersions == GoVersion,
-			Detail: fmt.Sprintf("%s (baseline %s)", orNone(toolVersions), GoVersion),
+			Name: ".tool-versions golang", OK: t.Go != "" && toolVersions == t.Go,
+			Detail: fmt.Sprintf("%s (latest Go %s.x is %s)", orNone(toolVersions), GoMinor, want),
 		},
-		pinCheck("ci.yml calls go-ci.yml", read(".github/workflows/ci.yml"), goCIRef, pin),
-		pinCheck("release.yml calls go-release.yml", read(".github/workflows/release.yml"), goReleaseRef, pin),
+		{
+			Name: "go.mod and .tool-versions agree", OK: goDirective != "" && goDirective == toolVersions,
+			Detail: fmt.Sprintf("go.mod %s, .tool-versions %s", orNone(goDirective), orNone(toolVersions)),
+		},
+		pinCheck("ci.yml calls go-ci.yml", read(".github/workflows/ci.yml"), goCIRef, t.Pin),
+		pinCheck("release.yml calls go-release.yml", read(".github/workflows/release.yml"), goReleaseRef, t.Pin),
 		strayReleaseCheck(src, read),
 	}
 
@@ -236,7 +254,8 @@ const (
 
 // Report renders results as Markdown. With diffs false it is the summary an
 // issue body can hold; with diffs true every drifted file's diff follows.
-func Report(results []*RepoResult, baselineSHA string, pin Pin, runURL string, diffs bool) string {
+func Report(results []*RepoResult, baselineSHA string, t Targets, runURL string, diffs bool) string {
+	pin := t.Pin
 	var sb strings.Builder
 	drifted := 0
 	for _, r := range results {
@@ -253,8 +272,8 @@ func Report(results []*RepoResult, baselineSHA string, pin Pin, runURL string, d
 	if pin.Tag != "" {
 		tag = "callers pin " + pin.Tag + " (`" + short(pin.SHA) + "`)"
 	}
-	fmt.Fprintf(&sb, "Baseline: blairham/.github %s; %s. **%d of %d** repositories drift from it.\n\n",
-		base, tag, drifted, len(results))
+	fmt.Fprintf(&sb, "Baseline: blairham/.github %s; %s; Go %s. **%d of %d** repositories drift from it.\n\n",
+		base, tag, t.Go, drifted, len(results))
 	sb.WriteString("Files are compared byte for byte with what `make sync` would render; ")
 	sb.WriteString("a known exception is an override in `overrides/<repo>.yml`, listed with its reason.\n")
 	if runURL != "" {

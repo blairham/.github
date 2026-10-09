@@ -29,7 +29,7 @@ public Go repositories (the list is `repos.yml`). Two things live here:
    drifted.
 
 The module is `github.com/blairham/dotgithub` (`.github` is not a legal
-module path element). Go 1.26.8, gofumpt and golangci-lint pinned in go.mod's
+module path element). Go 1.26 (the latest patch, like every governed repo), gofumpt and golangci-lint pinned in go.mod's
 `tool` block.
 
 **Releases are signed annotated tags** (`git tag -s vX.Y.Z`), cut from a
@@ -85,7 +85,12 @@ departure must be approved by Blair before it is encoded — a new override is a
 decision, not a fix.
 
 Structural checks `drift` also runs: go.mod `go` and `.tool-versions`
-`golang` equal `GoVersion` (1.26.8); `ci.yml` calls `go-ci.yml` and
+`golang` both equal the **latest published patch** of `GoMinor` (1.26),
+read from https://go.dev/dl/?mode=json on every run, and equal each other — the
+baseline pins the minor, never a patch, because patch releases are how stdlib
+vulnerabilities get fixed and go-vulncheck rejects the old one. If the release
+list cannot be fetched or lists no stable 1.26.x, drift exits 2 rather than
+passing; `ci.yml` calls `go-ci.yml` and
 `release.yml` calls `go-release.yml` at the latest blairham/.github tag's
 commit with `# <tag>` (an older pin is drift); no other workflow runs
 GoReleaser; `CHANGELOG.md` exists unless `release.notes: generated`.
