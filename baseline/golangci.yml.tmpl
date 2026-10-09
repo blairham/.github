@@ -12,12 +12,12 @@
 version: "2"
 
 run:
-  timeout: 10m
+  timeout: [% .Knobs.GolangciTimeout %]
   tests: true
   modules-download-mode: readonly
   allow-parallel-runners: true
   # Bounds the footprint: golangci-lint defaults to NumCPU.
-  concurrency: 4
+  concurrency: [% .Knobs.GolangciConcurrency %]
 
 output:
   formats:
@@ -32,7 +32,7 @@ linters:
   enable:
     # Core linters (enabled by default)
     - errcheck # Check for unchecked errors
-    - govet # Suspicious constructs, incl. shadow + fieldalignment (see settings)
+    - govet # Suspicious constructs; the analyzers are in settings
     - ineffassign # Detect ineffectual assignments
     - staticcheck # The staticcheck rule set
     - unused # Check for unused constants, variables, functions and types
@@ -85,6 +85,13 @@ linters:
 
     # Memory
     - wastedassign # Finds wasted assignment statements
+[%- if .Knobs.GolangciLintersExtra %]
+
+    # Beyond the baseline, for this repository (overrides/[% .Repo %].yml)
+[%- range .Knobs.GolangciLintersExtra %]
+    - [% .Name %]
+[%- end %]
+[%- end %]
 
   exclusions:
     rules:
@@ -106,10 +113,29 @@ linters:
         linters:
           - gocritic
         text: "initClause"
+[%- range .Knobs.GolangciExclusions %]
+
+[% comment 6 .Reason %]
+      - [% if .Path %]path: [% .Path %][% else %]path-except: [% .PathExcept %][% end %]
+        linters:
+[%- range .Linters %]
+          - [% . %]
+[%- end %]
+[%- if .Text %]
+        text: [% .Text %]
+[%- end %]
+[%- end %]
 
   settings:
     misspell:
       locale: US
+[%- if .Knobs.MisspellIgnore %]
+      # Words this repository may spell as written (overrides/[% .Repo %].yml).
+      ignore-rules:
+[%- range .Knobs.MisspellIgnore %]
+        - [% . %]
+[%- end %]
+[%- end %]
 
     gosec:
       severity: medium
@@ -119,6 +145,12 @@ linters:
         - G204 # Subprocess launched with variable
         - G404 # Weak random number generator
         - G115 # Integer overflow conversion (safe when values are properly clamped)
+[%- if .Knobs.GolangciGosecExcludesExtra %]
+        # Further rules this repository excludes (overrides/[% .Repo %].yml).
+[%- range .Knobs.GolangciGosecExcludesExtra %]
+        - [% . %]
+[%- end %]
+[%- end %]
 
     gocyclo:
       min-complexity: 15
@@ -180,17 +212,18 @@ linters:
 
     govet:
       enable:
-        - atomicalign
-        - fieldalignment
-        - nilness
-        - reflectvaluecompare
-        - shadow
-        - timeformat
-        - unusedwrite
+[%- range govet "atomicalign" "fieldalignment" "nilness" "reflectvaluecompare" "shadow" "timeformat" "unusedwrite" %]
+        - [% . %]
+[%- end %]
 
     goconst:
       min-len: 3
       min-occurrences: 3
+[%- range .Knobs.GolangciLintersExtra %]
+
+    [% .Name %]:
+[% yamlIndent 6 .Settings %]
+[%- end %]
 
 formatters:
   enable:

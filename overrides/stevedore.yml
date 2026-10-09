@@ -16,3 +16,10 @@ overrides:
           # Vendored dependencies
           '''^vendor/''',
       ]
+  - knob: golangci.govet-disable
+    value: [fieldalignment]
+    reason: >-
+      fieldalignment's fix reorders struct fields by size, and here field
+      order is output: summary.Result, PlanEntry and publish.Notification are
+      marshaled as JSON (--output json, the plan matrix, webhook payloads),
+      whose keys follow the struct.

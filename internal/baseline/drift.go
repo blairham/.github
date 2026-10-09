@@ -64,15 +64,28 @@ const (
 )
 
 var (
-	goCIRef      = regexp.MustCompile(`uses:\s*blairham/\.github/\.github/workflows/go-ci\.yml@([0-9a-f]{40})`)
-	goReleaseRef = regexp.MustCompile(`uses:\s*blairham/\.github/\.github/workflows/go-release\.yml@([0-9a-f]{40})`)
+	// The pin and its `# vX.Y.Z` comment: dependabot bumps a SHA pin only
+	// when the comment names the tag it resolves to.
+	goCIRef = regexp.MustCompile(
+		`uses:\s*blairham/\.github/\.github/workflows/go-ci\.yml@([0-9a-f]{40})(?:[ \t]+#[ \t]*(\S+))?`,
+	)
+	goReleaseRef = regexp.MustCompile(
+		`uses:\s*blairham/\.github/\.github/workflows/go-release\.yml@([0-9a-f]{40})(?:[ \t]+#[ \t]*(\S+))?`,
+	)
 )
 
-// CheckRepo compares one repository's tree with the rendered baseline.
-// baselineSHA, when set, is the blairham/.github commit the reusable
-// workflows should be pinned to; a different pin is reported, not failed,
-// because dependabot moves it.
-func CheckRepo(root, repo string, src Source, groups []Group, baselineSHA string) *RepoResult {
+// Pin is the blairham/.github release callers must pin: its latest tag and
+// the commit that tag names. A zero Pin means there is no tag to compare
+// against, and any full-SHA pin passes.
+type Pin struct {
+	Tag string
+	SHA string
+}
+
+// CheckRepo compares one repository's tree with the rendered baseline. A
+// reusable-workflow pin is in sync only at pin.SHA with a `# pin.Tag`
+// comment; an older pin is drift, which dependabot's bump resolves.
+func CheckRepo(root, repo string, src Source, groups []Group, pin Pin) *RepoResult {
 	r := &RepoResult{Repo: repo}
 	if gs, ok := src.(*GitHubSource); ok {
 		r.Commit = gs.Commit
@@ -117,11 +130,11 @@ func CheckRepo(root, repo string, src Source, groups []Group, baselineSHA string
 		}
 		r.Files = append(r.Files, res)
 	}
-	r.Checks = structuralChecks(src, &knobs, baselineSHA)
+	r.Checks = structuralChecks(src, &knobs, pin)
 	return r
 }
 
-func structuralChecks(src Source, knobs *Knobs, baselineSHA string) []Check {
+func structuralChecks(src Source, knobs *Knobs, pin Pin) []Check {
 	read := func(p string) string {
 		b, err := src.ReadFile(p)
 		if err != nil {
@@ -141,8 +154,8 @@ func structuralChecks(src Source, knobs *Knobs, baselineSHA string) []Check {
 			Name: ".tool-versions golang", OK: toolVersions == GoVersion,
 			Detail: fmt.Sprintf("%s (baseline %s)", orNone(toolVersions), GoVersion),
 		},
-		pinCheck("ci.yml calls go-ci.yml", read(".github/workflows/ci.yml"), goCIRef, baselineSHA),
-		pinCheck("release.yml calls go-release.yml", read(".github/workflows/release.yml"), goReleaseRef, baselineSHA),
+		pinCheck("ci.yml calls go-ci.yml", read(".github/workflows/ci.yml"), goCIRef, pin),
+		pinCheck("release.yml calls go-release.yml", read(".github/workflows/release.yml"), goReleaseRef, pin),
 		strayReleaseCheck(src, read),
 	}
 
@@ -178,19 +191,28 @@ func strayReleaseCheck(src Source, read func(string) string) Check {
 	return Check{Name: name, OK: len(stray) == 0, Detail: orNone(strings.Join(stray, ", "))}
 }
 
-func pinCheck(name, content string, re *regexp.Regexp, baselineSHA string) Check {
+func pinCheck(name, content string, re *regexp.Regexp, pin Pin) Check {
 	m := re.FindStringSubmatch(content)
-	if len(m) != 2 {
+	if len(m) != 3 {
 		if content == "" {
 			return Check{Name: name, Detail: "workflow missing"}
 		}
 		return Check{Name: name, Detail: "does not call it by a full commit SHA"}
 	}
-	detail := "pinned at " + m[1][:12]
-	if baselineSHA != "" && m[1] != baselineSHA {
-		detail += " (baseline main is " + short(baselineSHA) + "; dependabot moves the pin)"
+	sha, comment := m[1], m[2]
+	at := "pinned at " + short(sha)
+	if comment != "" {
+		at += " # " + comment
 	}
-	return Check{Name: name, OK: true, Detail: detail}
+	switch {
+	case pin.SHA == "":
+		return Check{Name: name, OK: true, Detail: at + " (no blairham/.github tag to compare against)"}
+	case sha != pin.SHA:
+		return Check{Name: name, Detail: at + "; latest is " + short(pin.SHA) + " # " + pin.Tag}
+	case comment != pin.Tag:
+		return Check{Name: name, Detail: at + "; the comment must be `# " + pin.Tag + "` for dependabot to bump it"}
+	}
+	return Check{Name: name, OK: true, Detail: at}
 }
 
 func orNone(s string) string {
@@ -214,7 +236,7 @@ const (
 
 // Report renders results as Markdown. With diffs false it is the summary an
 // issue body can hold; with diffs true every drifted file's diff follows.
-func Report(results []*RepoResult, baselineSHA, runURL string, diffs bool) string {
+func Report(results []*RepoResult, baselineSHA string, pin Pin, runURL string, diffs bool) string {
 	var sb strings.Builder
 	drifted := 0
 	for _, r := range results {
@@ -227,8 +249,12 @@ func Report(results []*RepoResult, baselineSHA, runURL string, diffs bool) strin
 	if baselineSHA != "" {
 		base = "`" + short(baselineSHA) + "`"
 	}
-	fmt.Fprintf(&sb, "Baseline: blairham/.github %s. **%d of %d** repositories drift from it.\n\n",
-		base, drifted, len(results))
+	tag := "no tag yet"
+	if pin.Tag != "" {
+		tag = "callers pin " + pin.Tag + " (`" + short(pin.SHA) + "`)"
+	}
+	fmt.Fprintf(&sb, "Baseline: blairham/.github %s; %s. **%d of %d** repositories drift from it.\n\n",
+		base, tag, drifted, len(results))
 	sb.WriteString("Files are compared byte for byte with what `make sync` would render; ")
 	sb.WriteString("a known exception is an override in `overrides/<repo>.yml`, listed with its reason.\n")
 	if runURL != "" {

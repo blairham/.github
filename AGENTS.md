@@ -9,8 +9,9 @@ other tools read this file directly. The cross-repo working agreements in
 The shared CI/release machinery and configuration baseline for blairham's
 public Go repositories (the list is `repos.yml`). Two things live here:
 
-1. **Reusable workflows** (`on: workflow_call`) that callers pin by full
-   commit SHA:
+1. **Reusable workflows** (`on: workflow_call`) that callers pin by the
+   full commit SHA of the latest `vX.Y.Z` tag, with the tag as a comment
+   (`@<sha> # v0.0.0`) so dependabot bumps it:
    - `.github/workflows/go-ci.yml` — Pre-commit, Detect changed files,
      Build and test (OS matrix), Fuzz. Output `code`.
    - `.github/workflows/go-release.yml` — GoReleaser, keyless cosign over
@@ -29,7 +30,12 @@ public Go repositories (the list is `repos.yml`). Two things live here:
 
 The module is `github.com/blairham/dotgithub` (`.github` is not a legal
 module path element). Go 1.26.8, gofumpt and golangci-lint pinned in go.mod's
-`tool` block. No release: callers pin commits of `main`.
+`tool` block.
+
+**Releases are signed annotated tags** (`git tag -s vX.Y.Z`), cut from a
+green `main`; there is no GitHub release or artifact. A tag is what callers
+pin, so tag after any change callers should pick up, and dependabot opens the
+bump in every caller.
 
 ## Quick Reference
 
@@ -67,14 +73,21 @@ overrides:
     ref: https://github.com/blairham/<repo>/issues/N   # optional
 ```
 
-Knobs are a closed set defined in `internal/baseline/overrides.go`; add one
-there (with a test) rather than reaching for a free-form patch. Every
+Knobs are a closed set defined in `internal/baseline/knobs.go`
+(`go run ./cmd/baseline knobs` lists them); add one there, typed and narrow
+and with a test, rather than reaching for a free-form patch. List-valued
+knobs whose items differ in purpose (`golangci.exclusions`,
+`dependabot.docker-ignore`) carry a `reason` per item, rendered as a comment
+beside it. A knob that would render to nothing for a repository (a docker
+ignore without a Dockerfile, a pending or disabled name the baseline does not
+have) is refused. Every
 departure must be approved by Blair before it is encoded — a new override is a
 decision, not a fix.
 
 Structural checks `drift` also runs: go.mod `go` and `.tool-versions`
 `golang` equal `GoVersion` (1.26.8); `ci.yml` calls `go-ci.yml` and
-`release.yml` calls `go-release.yml` by full SHA; no other workflow runs
+`release.yml` calls `go-release.yml` at the latest blairham/.github tag's
+commit with `# <tag>` (an older pin is drift); no other workflow runs
 GoReleaser; `CHANGELOG.md` exists unless `release.notes: generated`.
 
 ## Conventions

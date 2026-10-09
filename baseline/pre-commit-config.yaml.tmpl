@@ -14,10 +14,11 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
+      # The two fixers rewrite in place, so generated files stay out of them.
       - id: trailing-whitespace
-        exclude: ^dist/
+        exclude: [% .Knobs.PreCommitGeneratedExclude %]
       - id: end-of-file-fixer
-        exclude: ^dist/
+        exclude: [% .Knobs.PreCommitGeneratedExclude %]
       - id: check-yaml
         args: ['--allow-multiple-documents']
 [%- if .HasCharts %]
@@ -86,6 +87,17 @@ repos:
       # Known-vulnerable dependencies fail the commit, not the release.
       - id: go-vulncheck
 [%- end %]
+
+  # US English over prose: golangci-lint's misspell reaches Go files and
+  # nothing else. Reports, never rewrites — unlike a formatter it can reach
+  # inside a string literal. `importas` is a linter's name, not a typo.
+  - repo: https://github.com/golangci/misspell
+    rev: v0.8.0
+    hooks:
+      - id: misspell
+        args: [-locale, US, -i, "[% misspellIgnore .Knobs.MisspellIgnore %]", -error]
+        files: \.(md|ya?ml)$
+        exclude: [% .Knobs.PreCommitGeneratedExclude %]
 
   # Secret scanning; the rules and any allowlist are in .gitleaks.toml.
   - repo: https://github.com/gitleaks/gitleaks

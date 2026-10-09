@@ -16,3 +16,39 @@ overrides:
           # Vendored dependencies
           '''^vendor/''',
       ]
+  - knob: golangci.linters-pending
+    reason: >-
+      Staged adoption: go-pre-commit runs 9 of the baseline's linters and
+      adopts the rest one per pull request, each landing only once the whole
+      tree is clean under it. This list shrinks to empty.
+    value:
+      - whitespace
+      - unparam
+      - goconst
+      - bodyclose
+      - contextcheck
+      - rowserrcheck
+      - sqlclosecheck
+      - errname
+      - errorlint
+      - forcetypeassert
+      - nilerr
+      - nilnil
+      - noctx
+      - predeclared
+      - prealloc
+      - sloglint
+      - gosec
+      - nestif
+      - funlen
+      - gocognit
+      - gocyclo
+      - thelper
+      - tparallel
+      - testableexamples
+      - importas
+      - interfacebloat
+      - wastedassign
+  - knob: pre-commit.generated-exclude
+    value: ^(dist/|build/)
+    reason: build/ is this repository's build output directory, alongside GoReleaser's dist/.

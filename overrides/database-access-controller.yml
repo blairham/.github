@@ -1,0 +1,10 @@
+# blairham/database-access-controller's approved departures from the baseline.
+overrides:
+  - knob: dependabot.docker-ignore
+    reason: A PostgreSQL major needs tested migration support, not a lone image bump.
+    value:
+      - dependency-name: docker/library/postgres
+        update-types: [version-update:semver-major]
+        reason: >-
+          Stay on the PostgreSQL major CI's integration suite uses; a major
+          bump needs tested migration support first.

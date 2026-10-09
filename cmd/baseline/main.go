@@ -139,7 +139,8 @@ func runDrift(args []string) error {
 	root := fs.String("root", ".", "blairham/.github checkout")
 	out := fs.String("o", "", "write the summary report here (default stdout)")
 	diffsOut := fs.String("diffs", "", "also write the report with every diff here")
-	sha := fs.String("baseline-sha", "", "blairham/.github commit the workflows should be pinned to")
+	sha := fs.String("baseline-sha", "", "blairham/.github commit this report describes (for the header)")
+	pinRepo := fs.String("pin-repo", "blairham/.github", "repository whose latest vX.Y.Z tag callers must pin")
 	runURL := fs.String("run-url", "", "link to the workflow run, for the report")
 	only := fs.String("repo", "", "check just this repository")
 	exitCode := fs.Bool("exit-code", false, "exit 1 when anything drifts")
@@ -155,6 +156,14 @@ func runDrift(args []string) error {
 		return err
 	}
 	ctx := context.Background()
+	owner, name, ok := strings.Cut(*pinRepo, "/")
+	if !ok {
+		return fmt.Errorf("-pin-repo %q is not owner/repo", *pinRepo)
+	}
+	pin, err := baseline.LatestTag(ctx, owner, name)
+	if err != nil {
+		return err
+	}
 	results := make([]*baseline.RepoResult, 0, len(rf.Repos))
 	for _, repo := range rf.Repos {
 		src, srcErr := baseline.NewGitHubSource(ctx, rf.Owner, repo)
@@ -162,9 +171,9 @@ func runDrift(args []string) error {
 			results = append(results, &baseline.RepoResult{Repo: repo, Err: srcErr})
 			continue
 		}
-		results = append(results, baseline.CheckRepo(*root, repo, src, groups, *sha))
+		results = append(results, baseline.CheckRepo(*root, repo, src, groups, pin))
 	}
-	if err := writeReports(results, *sha, *runURL, *out, *diffsOut); err != nil {
+	if err := writeReports(results, *sha, pin, *runURL, *out, *diffsOut); err != nil {
 		return err
 	}
 	failed := 0
@@ -205,8 +214,8 @@ func loadRepos(root, only string) (reposFile, error) {
 	return rf, nil
 }
 
-func writeReports(results []*baseline.RepoResult, sha, runURL, out, diffsOut string) error {
-	summary := baseline.Report(results, sha, runURL, false)
+func writeReports(results []*baseline.RepoResult, sha string, pin baseline.Pin, runURL, out, diffsOut string) error {
+	summary := baseline.Report(results, sha, pin, runURL, false)
 	if out == "" {
 		fmt.Print(summary)
 	} else if err := os.WriteFile(out, []byte(summary), 0o600); err != nil {
@@ -215,7 +224,7 @@ func writeReports(results []*baseline.RepoResult, sha, runURL, out, diffsOut str
 	if diffsOut == "" {
 		return nil
 	}
-	return os.WriteFile(diffsOut, []byte(baseline.Report(results, sha, runURL, true)), 0o600)
+	return os.WriteFile(diffsOut, []byte(baseline.Report(results, sha, pin, runURL, true)), 0o600)
 }
 
 func runOverrides(args []string) error {
@@ -238,7 +247,9 @@ func runOverrides(args []string) error {
 	var errs []error
 	for _, m := range matches {
 		repo := strings.TrimSuffix(filepath.Base(m), ".yml")
-		if !slices.Contains(rf.Repos, repo) {
+		// .github is this repository: the baseline governs it too
+		// (ci.yml's `Baseline in sync`), so it may carry overrides.
+		if repo != ".github" && !slices.Contains(rf.Repos, repo) {
 			errs = append(errs, fmt.Errorf("%s: %s is not in repos.yml", m, repo))
 		}
 		ovs, loadErr := baseline.LoadOverrides(*root, repo)
