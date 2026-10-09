@@ -95,6 +95,17 @@ reported as **CHECK FAILED**, never as drift, and the run exits 2. Exit
 status: 0 nothing drifts, 1 drift (with `-exit-code`), 2 the tool could not
 look.
 
+**Staged vs permanent.** A knob ending in `-pending`
+(`golangci.linters-pending`, `golangci.formatters-pending`,
+`golangci.settings-pending`) records staged adoption: a list that shrinks,
+one entry per pull request, to empty. Every other override is a permanent
+exception. The drift report counts and lists the two apart (with how many
+pending entries are left) so a pending list that stops shrinking stays
+visible. `golangci.settings-pending` and `golangci.settings-off` take the
+same closed set of keys — `govet.<analyzer>` for each analyzer the baseline
+enables, `errcheck.check-blank`, `errcheck.check-type-assertions` — and render
+the setting off with a comment naming the override file.
+
 Structural checks `drift` also runs: go.mod `go` and `.tool-versions`
 `golang` both equal the **latest published patch** of `GoMinor` (1.26),
 read from https://go.dev/dl/?mode=json on every run, and equal each other — the

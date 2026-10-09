@@ -48,22 +48,60 @@ func Render(root string, f *Facts) (map[string][]byte, error) {
 		return nil, err
 	}
 	out := make(map[string][]byte, len(Files))
-	govetSeen := map[string]bool{}
+	// The template names every setting it has (govet's analyzers, errcheck's
+	// flags); a pending or off key it never named is not a baseline setting.
+	known := map[string]bool{}
+	off := func(key string) string {
+		switch {
+		case slices.Contains(f.Knobs.GolangciSettingsPending, key):
+			return "pending"
+		case slices.Contains(f.Knobs.GolangciSettingsOff, key):
+			return "off"
+		}
+		return ""
+	}
 	fm := template.FuncMap{
 		"comment":        comment,
 		"yamlIndent":     yamlIndent,
 		"misspellIgnore": misspellIgnore,
-		// govet lists the baseline's analyzers minus the disabled ones,
-		// recording which it was asked about.
+		// govet lists the baseline's analyzers minus the pending and off ones.
 		"govet": func(all ...string) []string {
 			var on []string
 			for _, a := range all {
-				govetSeen[a] = true
-				if !slices.Contains(f.Knobs.GolangciGovetDisable, a) {
+				known["govet."+a] = true
+				if off("govet."+a) == "" {
 					on = append(on, a)
 				}
 			}
 			return on
+		},
+		// setting renders a boolean baseline setting: true, or false with
+		// the reason's kind and where it is written.
+		"setting": func(key string) string {
+			known[key] = true
+			if why := off(key); why != "" {
+				return "false # " + why + " here: overrides/" + f.Repo + ".yml"
+			}
+			return "true"
+		},
+		// settingNotes comments the settings under prefix that are pending or
+		// off, so the rendered file says why an analyzer is missing.
+		"settingNotes": func(prefix string) []string {
+			var notes []string
+			for _, kind := range []struct {
+				what string
+				keys []string
+			}{
+				{keys: f.Knobs.GolangciSettingsPending, what: "pending (staged adoption)"},
+				{keys: f.Knobs.GolangciSettingsOff, what: "off"},
+			} {
+				for _, k := range kind.keys {
+					if name, ok := strings.CutPrefix(k, prefix); ok {
+						notes = append(notes, name+": "+kind.what+" here — overrides/"+f.Repo+".yml")
+					}
+				}
+			}
+			return notes
 		},
 	}
 	for _, file := range Files {
@@ -73,9 +111,12 @@ func Render(root string, f *Facts) (map[string][]byte, error) {
 		}
 		out[file.Path] = b
 	}
-	for _, a := range f.Knobs.GolangciGovetDisable {
-		if !govetSeen[a] {
-			return nil, fmt.Errorf("golangci.govet-disable: %q is not a baseline govet analyzer", a)
+	for _, k := range slices.Concat(f.Knobs.GolangciSettingsPending, f.Knobs.GolangciSettingsOff) {
+		if !known[k] {
+			return nil, fmt.Errorf("golangci settings: %q is not a baseline setting", k)
+		}
+		if slices.Contains(f.Knobs.GolangciSettingsPending, k) && slices.Contains(f.Knobs.GolangciSettingsOff, k) {
+			return nil, fmt.Errorf("golangci settings: %q is both pending and off", k)
 		}
 	}
 	return out, nil

@@ -16,8 +16,8 @@ overrides:
           # Vendored dependencies
           '''^vendor/''',
       ]
-  - knob: golangci.govet-disable
-    value: [fieldalignment]
+  - knob: golangci.settings-off
+    value: [govet.fieldalignment]
     reason: >-
       fieldalignment's fix reorders struct fields by size, and here field
       order is output: summary.Result, PlanEntry and publish.Notification are

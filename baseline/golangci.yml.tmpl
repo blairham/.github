@@ -207,13 +207,16 @@ linters:
         - name: redefines-builtin-id
 
     errcheck:
-      check-type-assertions: true
-      check-blank: true
+      check-type-assertions: [% setting "errcheck.check-type-assertions" %]
+      check-blank: [% setting "errcheck.check-blank" %]
 
     govet:
       enable:
 [%- range govet "atomicalign" "fieldalignment" "nilness" "reflectvaluecompare" "shadow" "timeformat" "unusedwrite" %]
         - [% . %]
+[%- end %]
+[%- range settingNotes "govet." %]
+        # [% . %]
 [%- end %]
 
     goconst:

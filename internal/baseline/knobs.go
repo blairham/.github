@@ -38,8 +38,11 @@ type Knobs struct {
 	// GolangciExclusions are path-scoped linters.exclusions.rules, each
 	// with its own reason.
 	GolangciExclusions []Exclusion
-	// GolangciGovetDisable are baseline govet analyzers turned off.
-	GolangciGovetDisable []string
+	// GolangciSettingsPending are baseline settings not yet on here, staged
+	// like GolangciLintersPending: "govet.<analyzer>" or "errcheck.<flag>".
+	GolangciSettingsPending []string
+	// GolangciSettingsOff are baseline settings turned off for good.
+	GolangciSettingsOff []string
 	// GolangciGosecExcludesExtra are gosec rules excluded beyond the
 	// baseline's.
 	GolangciGosecExcludesExtra []string
@@ -123,6 +126,33 @@ var (
 		"version-update:semver-patch": true,
 	}
 )
+
+var settingKey = regexp.MustCompile(`^(govet\.[a-z]+|errcheck\.[a-z-]+)$`)
+
+// settingKeys decodes a list of setting keys. Their shape is checked here;
+// that each names a setting the baseline actually has is checked at render,
+// where the template says which settings exist.
+func settingKeys(field string, v *yaml.Node, out *[]string) error {
+	var l []string
+	if err := strict(v, &l); err != nil {
+		return err
+	}
+	if len(l) == 0 {
+		return fmt.Errorf("%s: empty list; drop the override instead", field)
+	}
+	seen := map[string]bool{}
+	for _, key := range l {
+		if !settingKey.MatchString(key) {
+			return fmt.Errorf("%s: %q is not a govet.<analyzer> or errcheck.<setting> key", field, key)
+		}
+		if seen[key] {
+			return fmt.Errorf("%s: %q listed twice", field, key)
+		}
+		seen[key] = true
+	}
+	*out = l
+	return nil
+}
 
 func names(field string, out *[]string) func(*Knobs, *yaml.Node) error {
 	return func(_ *Knobs, v *yaml.Node) error {
@@ -226,11 +256,17 @@ var knobSpecs = map[string]knobSpec{
 			return errors.Join(errs...)
 		},
 	},
-	"golangci.govet-disable": {
-		// Render refuses an analyzer the baseline does not enable.
-		doc: "baseline govet analyzers turned off",
+	"golangci.settings-pending": {
+		// Render refuses a key outside the baseline's settings.
+		doc: "baseline settings not on yet, staged to shrink to empty: govet.<analyzer>, errcheck.check-blank, errcheck.check-type-assertions",
 		apply: func(k *Knobs, v *yaml.Node) error {
-			return names("golangci.govet-disable", &k.GolangciGovetDisable)(k, v)
+			return settingKeys("golangci.settings-pending", v, &k.GolangciSettingsPending)
+		},
+	},
+	"golangci.settings-off": {
+		doc: "baseline settings off for good (same keys as settings-pending)",
+		apply: func(k *Knobs, v *yaml.Node) error {
+			return settingKeys("golangci.settings-off", v, &k.GolangciSettingsOff)
 		},
 	},
 	"golangci.gosec-excludes-extra": {
