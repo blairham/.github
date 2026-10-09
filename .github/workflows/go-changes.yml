@@ -1,0 +1,67 @@
+name: Go changes
+
+# Change detection on its own, so a caller's repository-specific jobs
+# (integration suites, whole-tree lint, sweeps) can start as soon as the
+# change is classified instead of waiting for all of go-ci.yml:
+#
+#   jobs:
+#     ci:
+#       name: CI
+#       uses: blairham/.github/.github/workflows/go-ci.yml@<sha of the latest tag> # vX.Y.Z
+#     changes:
+#       name: Changes
+#       uses: blairham/.github/.github/workflows/go-changes.yml@<sha of the latest tag> # vX.Y.Z
+#       with:
+#         filters: '{"kafka": ["^internal/kafka/", "^hack/kafka"]}'
+#     integration:
+#       name: Kafka integration
+#       needs: changes
+#       runs-on: ubuntu-latest
+#       steps:
+#         - uses: actions/checkout@...
+#           if: fromJSON(needs.changes.outputs.matches).kafka == 'true'
+#         ...
+#
+# Gate the *steps*, never the job: a required check whose job is skipped
+# never reports and stays pending forever. A repository with no
+# repository-specific jobs does not need this; go-ci.yml classifies the
+# change for its own jobs with the same action.
+on:
+  workflow_call:
+    inputs:
+      filters:
+        description: >-
+          JSON object of name -> list of extended regexes (grep -E) over the
+          changed paths. Names are read back as
+          fromJSON(needs.<job>.outputs.matches).<name>; use names that are
+          valid identifiers, or index with ['name'].
+        type: string
+        default: '{}'
+    outputs:
+      code:
+        description: "'true' when anything but prose changed, or when it is not a pull request."
+        value: ${{ jobs.changes.outputs.code }}
+      matches:
+        description: JSON object of filter name -> "true"/"false"; all "true" outside a pull request.
+        value: ${{ jobs.changes.outputs.matches }}
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect changed files
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      matches: ${{ steps.filter.outputs.matches }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the diff needs the base commit, not just HEAD
+      # Pinned by a commit of this repository, like go-ci.yml's copy of the
+      # same step; bump the two together.
+      - id: filter
+        uses: blairham/.github/.github/actions/changes@f0ec17eb08a61a84702a9c58c3369dba4ed21268 # main, #13
+        with:
+          filters: ${{ inputs.filters }}

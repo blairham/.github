@@ -18,6 +18,9 @@ public Go repositories (the list is `repos.yml`). Two things live here:
      `checksums.txt`, `actions/attest-build-provenance`, the bundle attached
      as `<repo>-<tag>.intoto.jsonl`, optional image provenance; `snapshot`
      input for a dry run.
+   - `.github/workflows/go-changes.yml` — change detection alone, outputs
+     `code` and `matches` (named regex filters), so repository-specific jobs
+     can `needs: changes` and start without waiting for all of go-ci.
    - `.github/workflows/go-image.yml` — build-only Dockerfile check.
    - `.github/workflows/go-chart.yml` — publish and sign Helm charts.
    Scorecard and CodeQL are deliberately **not** reusable: they are synced
@@ -94,6 +97,44 @@ passing; `ci.yml` calls `go-ci.yml` and
 `release.yml` calls `go-release.yml` at the latest blairham/.github tag's
 commit with `# <tag>` (an older pin is drift); no other workflow runs
 GoReleaser; `CHANGELOG.md` exists unless `release.notes: generated`.
+
+## Repository-specific jobs: `needs: changes`, not `needs: ci`
+
+`needs: ci` makes a job wait for pre-commit and build/test before it starts
+(sh measured ~10 → ~21 min wall clock). A job that only needs to know what
+changed depends on go-changes.yml instead:
+
+```yaml
+jobs:
+  ci:
+    name: CI
+    uses: blairham/.github/.github/workflows/go-ci.yml@<latest tag sha> # vX.Y.Z
+  changes:
+    name: Changes
+    uses: blairham/.github/.github/workflows/go-changes.yml@<latest tag sha> # vX.Y.Z
+    with:
+      filters: '{"kafka": ["^internal/kafka/", "^hack/kafka"]}'
+  integration:
+    name: Kafka integration
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@<sha> # vX
+        if: fromJSON(needs.changes.outputs.matches).kafka == 'true'
+      # every step gated the same way
+```
+
+Gate steps, never the job (a skipped required job never reports). `code` is
+the same prose/code answer go-ci uses. A repository without
+repository-specific jobs does not call go-changes.yml; drift accepts it
+either way, but a call must be pinned like go-ci.yml.
+
+Both workflows run `.github/actions/changes`, pinned **by a commit of this
+repository** (a reusable workflow's `./` resolves in the caller's checkout).
+Changing the action is therefore two PRs: the action, then both pins bumped
+together to its merge commit — `TestChangesActionPinsAgree` fails if they
+differ. Its behavior is tested in `internal/changes`, and ci.yml runs it by
+local path.
 
 ## Conventions
 

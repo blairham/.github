@@ -150,35 +150,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the diff needs the base commit, not just HEAD
+      # The filter is blairham/.github's changes action, shared with
+      # go-changes.yml. Pinned by a commit of this repository, not `./`,
+      # which would resolve in the caller's checkout. Moving the action
+      # means bumping this pin and go-changes.yml's together.
       - id: filter
         name: Is any of this code?
-        env:
-          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          code=false
-          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
-            # A merge runs everything: it is the first time this tree is
-            # tested *as main*, and what that protects against is an earlier
-            # merge that broke something nobody has run since.
-            echo "$GITHUB_EVENT_NAME to $GITHUB_REF_NAME — running everything"
-            code=true
-          elif ! git cat-file -e "$BASE" 2>/dev/null; then
-            # No usable base commit — a force push, or a fetch that did not
-            # reach it. An empty diff is indistinguishable from "only prose
-            # changed", so this would silently skip every test.
-            echo "base commit $BASE is not present — running everything"
-            code=true
-          else
-            while IFS= read -r f; do
-              [ -n "$f" ] || continue
-              case "$f" in
-                docs/*|*.md|LICENSE|LICENSE.*|NOTICE|*.png|*.jpg|*.gif|*.svg) ;; # prose
-                *) code=true; break ;;
-              esac
-            done <<<"$(git diff --name-only "$BASE"...HEAD)"
-          fi
-          echo "code=$code" >> "$GITHUB_OUTPUT"
-          echo "changed files are $([ "$code" = true ] && echo 'code — full run' || echo 'prose only — skipping the code jobs')"
+        uses: blairham/.github/.github/actions/changes@f0ec17eb08a61a84702a9c58c3369dba4ed21268 # main, #13
 
   test:
     name: Build and test (${{ matrix.os }})

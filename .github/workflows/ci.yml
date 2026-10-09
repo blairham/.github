@@ -52,6 +52,33 @@ jobs:
           git diff --exit-code
           test -z "$(git status --porcelain)" || { git status --porcelain; exit 1; }
 
+  # go-changes.yml by local path, consumed the way a caller consumes it.
+  changes:
+    name: Changes
+    uses: ./.github/workflows/go-changes.yml
+    with:
+      filters: '{"workflows": ["^\\.github/"], "never": ["^no-such-path$"]}'
+
+  changes-consumer:
+    name: Changes consumer
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read go-changes.yml's outputs as a caller would
+        env:
+          CODE: ${{ needs.changes.outputs.code }}
+          MATCHES: ${{ needs.changes.outputs.matches }}
+          NEVER: ${{ fromJSON(needs.changes.outputs.matches).never }}
+        run: |
+          set -euo pipefail
+          echo "code=$CODE matches=$MATCHES"
+          case "$CODE" in true|false) ;; *) echo "::error::code is '$CODE'"; exit 1 ;; esac
+          jq -e 'keys == ["never", "workflows"]' <<<"$MATCHES"
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "$NEVER" != false ]; then
+            echo "::error::'never' matched on a pull request"
+            exit 1
+          fi
+
   # The changes action exactly as go-ci.yml and go-changes.yml run it, by
   # local path, so a change to action.yml is exercised before anything pins
   # it. internal/changes tests the script's answers; this checks the wiring.

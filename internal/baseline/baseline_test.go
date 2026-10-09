@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -575,5 +576,54 @@ func TestGoChecksRequireLatestPatch(t *testing.T) {
 	mixed[".tool-versions"] = "golang 1.26.8\n"
 	if _, _, a := goOK(mixed, "1.26.9"); a {
 		t.Error("go.mod 1.26.9 and .tool-versions 1.26.8 reported as agreeing")
+	}
+}
+
+func TestOptionalChangesCheck(t *testing.T) {
+	t.Parallel()
+	latest, older := strings.Repeat("b", 40), strings.Repeat("a", 40)
+	pin := Pin{Tag: "v0.0.2", SHA: latest}
+	call := func(sha, tag string) string {
+		return "  changes:\n    uses: blairham/.github/.github/workflows/go-changes.yml@" + sha + " # " + tag + "\n"
+	}
+	for _, tc := range []struct {
+		src  memSource
+		name string
+		ok   bool
+	}{
+		{name: "not used", src: memSource{".github/workflows/ci.yml": "jobs: {}\n"}, ok: true},
+		{name: "pinned at the latest tag", src: memSource{".github/workflows/ci.yml": call(latest, "v0.0.2")}, ok: true},
+		{name: "older pin", src: memSource{".github/workflows/ci.yml": call(older, "v0.0.1")}, ok: false},
+		{name: "by branch", src: memSource{".github/workflows/x.yml": "    uses: blairham/.github/.github/workflows/go-changes.yml@main\n"}, ok: false},
+	} {
+		read := func(p string) string { return tc.src[p] }
+		if got := optionalChangesCheck(tc.src, read, pin); got.OK != tc.ok {
+			t.Errorf("%s: OK=%v, want %v (%s)", tc.name, got.OK, tc.ok, got.Detail)
+		}
+	}
+}
+
+// go-ci.yml and go-changes.yml run the same changes action; their pins on it
+// must move together, or the two answer the same question differently.
+func TestChangesActionPinsAgree(t *testing.T) {
+	t.Parallel()
+	pinRE := regexp.MustCompile(`uses:\s*blairham/\.github/\.github/actions/changes@([0-9a-f]{40})\b`)
+	files := []string{"go-ci.yml", "go-changes.yml"}
+	pins := make([]string, 0, len(files))
+	for _, f := range files {
+		b, err := os.ReadFile(
+			filepath.Join(root, ".github", "workflows", f),
+		) //nolint:gosec // a fixed file in this repository
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := pinRE.FindAllStringSubmatch(string(b), -1)
+		if len(m) != 1 {
+			t.Fatalf("%s pins the changes action %d times, want once by full SHA", f, len(m))
+		}
+		pins = append(pins, m[0][1])
+	}
+	if pins[0] != pins[1] {
+		t.Fatalf("go-ci.yml pins the changes action at %s, go-changes.yml at %s", pins[0], pins[1])
 	}
 }
