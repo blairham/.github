@@ -1,0 +1,13 @@
+# blairham/kafka-access-controller's approved departures from the baseline.
+overrides:
+  - knob: golangci.exclusions
+    reason: kubebuilder API types carry the CRD schema in their field comments.
+    value:
+      - path: ^apis/
+        linters: [govet]
+        text: fieldalignment
+        reason: >-
+          In kubebuilder API types the field comments ARE the CRD:
+          descriptions, defaults, enums, patterns, MaxItems. fieldalignment's
+          fix reorders the fields and drops those comments, silently
+          stripping the schema's validation, and the hook runs with --fix.

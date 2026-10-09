@@ -32,7 +32,7 @@ linters:
   enable:
     # Core linters (enabled by default)
     - errcheck # Check for unchecked errors
-    - govet # Suspicious constructs, incl. shadow + fieldalignment (see settings)
+    - govet # Suspicious constructs; the analyzers are in settings
     - ineffassign # Detect ineffectual assignments
     - staticcheck # The staticcheck rule set
     - unused # Check for unused constants, variables, functions and types
@@ -110,6 +110,10 @@ linters:
   settings:
     misspell:
       locale: US
+      # Words this repository may spell as written (overrides/.github.yml).
+      ignore-rules:
+        - colour
+        - cancelled
 
     gosec:
       severity: medium

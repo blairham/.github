@@ -39,4 +39,12 @@ updates:
         update-types:
           - version-update:semver-major
           - version-update:semver-minor
+[%- range .Knobs.DependabotDockerIgnore %]
+[% comment 6 .Reason %]
+      - dependency-name: [% .DependencyName %]
+        update-types:
+[%- range .UpdateTypes %]
+          - [% . %]
+[%- end %]
+[%- end %]
 [%- end %]

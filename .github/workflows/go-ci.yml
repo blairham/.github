@@ -7,9 +7,13 @@ name: Go CI
 #   jobs:
 #     ci:
 #       name: CI
-#       uses: blairham/.github/.github/workflows/go-ci.yml@<sha> # main
+#       uses: blairham/.github/.github/workflows/go-ci.yml@<sha of the latest tag> # vX.Y.Z
 #
-# and its checks report as `CI / Pre-commit`, `CI / Detect changed files`,
+# The `# vX.Y.Z` comment is what lets dependabot's github-actions updater
+# move the pin when blairham/.github is tagged; the drift check treats any
+# pin but the latest tag's commit, with that tag in the comment, as drift.
+#
+# Its checks report as `CI / Pre-commit`, `CI / Detect changed files`,
 # `CI / Build and test (ubuntu-latest)` and `CI / Fuzz`. Repository-specific
 # jobs `needs: ci` and gate their *steps* on `needs.ci.outputs.code` (see the
 # `changes` job for why steps, not jobs).
@@ -133,7 +137,7 @@ jobs:
   # filter: a required check that never runs reports as *pending forever*
   # rather than as passed, which makes a docs-only pull request unmergeable.
   # The same holds for a job-level `if:` on a required job, which is why the
-  # code jobs below skip their steps instead. Anything unrecognised counts as
+  # code jobs below skip their steps instead. Anything unrecognized counts as
   # code, so when this is wrong it is wrong in the direction of running the
   # tests.
   changes:

@@ -1,0 +1,11 @@
+# blairham/tuikit's approved departures from the baseline.
+overrides:
+  - knob: golangci.exclusions
+    reason: Example programs are written for demonstration, not to the library's complexity limits.
+    value:
+      - path: examples/
+        linters: [funlen, gocyclo, gocognit]
+        reason: >-
+          examples/ holds demonstration programs that walk through a feature
+          top to bottom; splitting them to satisfy complexity limits makes
+          them worse at their one job.

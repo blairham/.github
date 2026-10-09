@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"time"
 )
 
@@ -162,4 +164,64 @@ func (g *GitHubSource) get(ctx context.Context, path, accept string) (body []byt
 		return nil, fmt.Errorf("GET %s: %s: %.200s", path, resp.Status, body)
 	}
 	return body, nil
+}
+
+// LatestTag returns the highest vX.Y.Z tag of owner/repo and the commit it
+// names, or a zero Pin when there is none.
+func LatestTag(ctx context.Context, owner, repo string) (Pin, error) {
+	g := &GitHubSource{
+		client: &http.Client{Timeout: 30 * time.Second},
+		token:  os.Getenv("GH_TOKEN"),
+	}
+	if g.token == "" {
+		g.token = os.Getenv("GITHUB_TOKEN")
+	}
+	var tags []struct {
+		Name   string `json:"name"`
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	if err := g.getJSON(ctx, fmt.Sprintf("/repos/%s/%s/tags?per_page=100", owner, repo), &tags); err != nil {
+		return Pin{}, err
+	}
+	var best Pin
+	var bestV [3]int
+	for _, t := range tags {
+		v, ok := parseSemver(t.Name)
+		if !ok {
+			continue
+		}
+		if best.Tag == "" || semverLess(bestV, v) {
+			best, bestV = Pin{Tag: t.Name, SHA: t.Commit.SHA}, v
+		}
+	}
+	return best, nil
+}
+
+var semverTag = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)$`)
+
+func parseSemver(s string) ([3]int, bool) {
+	m := semverTag.FindStringSubmatch(s)
+	if m == nil {
+		return [3]int{}, false
+	}
+	var v [3]int
+	for i := range 3 {
+		n, err := strconv.Atoi(m[i+1])
+		if err != nil {
+			return v, false
+		}
+		v[i] = n
+	}
+	return v, true
+}
+
+func semverLess(a, b [3]int) bool {
+	for i := range 3 {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return false
 }

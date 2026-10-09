@@ -57,3 +57,84 @@ overrides:
     reason: >-
       No CHANGELOG.md: dozens of parallel agent pull requests would conflict
       on it constantly. Release notes are GoReleaser's generated list.
+  - knob: golangci.formatters-pending
+    reason: >-
+      sh runs gofumpt and goimports; it adopts the baseline's other formatters
+      the way it adopts linters, one per pull request once the whole tree is
+      clean under it.
+    value:
+      - gofmt
+      - gci
+      - golines
+  - knob: golangci.linters-extra
+    reason: >-
+      forbidigo keeps interp/ (a library embedded several Runners to a
+      process) off process-wide state: the working directory, the
+      environment, the standard streams, TMPDIR and exec. Each pattern was
+      added after the call it forbids shipped in a binary with nothing to
+      say so.
+    value:
+      - name: forbidigo
+        settings:
+          analyze-types: true
+          forbid:
+            - pattern: ^os\.Getwd$
+              msg: the working directory is r.Dir; driver seeds it at construction
+            - pattern: ^os\.Chdir$
+              msg: moves every Runner in the process; `cd` moves only r.Dir
+            - pattern: ^os\.(Getenv|LookupEnv|Environ)$
+              msg: the environment is r.Env and r.Vars; driver seeds Env at construction
+            - pattern: ^os\.(Setenv|Unsetenv|Clearenv)$
+              msg: writes state every Runner in the process shares; write r.Vars or r.Env
+            - pattern: ^syscall\.Exec$
+              msg: replacing the process is the binary's decision; use the ReplaceProcess hook
+            - pattern: ^exec\.LookPath$
+              msg: consults the process's PATH and cwd; the Runner owns both — use lookpath.go
+            - pattern: ^os\.Std(in|out|err)$
+              msg: the three streams are r.Stdin/r.Stdout/r.Stderr, and a nil one is empty; driver wires all three at construction
+            - pattern: ^os\.(TempDir|MkdirTemp|CreateTemp)$
+              msg: os.TempDir is os.Getenv("TMPDIR"), and MkdirTemp/CreateTemp call it for an empty dir; the temporary home is r.tempHome() — TMPDIR through r.getVar
+  - knob: golangci.exclusions
+    reason: forbidigo's scope — the rule is about the library packages, not the binaries or tests.
+    value:
+      - path-except: ^(interp|dialect|repl)/
+        linters: [forbidigo]
+        reason: Only the library packages are embedded; the binaries own the process and may touch its state.
+      - path: _test\.go$
+        linters: [forbidigo]
+        reason: Tests set up process state on purpose.
+  - knob: golangci.gosec-excludes-extra
+    reason: >-
+      A shell's job trips these rules by design: exec and redirection
+      (G304, G703), POSIX file modes under the umask (G301, G302, G306),
+      unsafe only in the ioctl/syscall wrappers (G103), and a bounds
+      heuristic Go enforces at run time anyway (G602). Surveyed on
+      2026-10-03 with every rule on: 928 findings, 0 defects.
+    value: [G103, G301, G302, G304, G306, G602, G703]
+  - knob: golangci.concurrency
+    value: 2
+    reason: >-
+      Several agents lint sh's worktrees at once; at golangci-lint's default
+      every run asks for every core (measured two runs at 260% and 884% CPU,
+      3GB resident each). Two keeps the realistic worst case near the core
+      count.
+  - knob: golangci.timeout
+    value: 30m
+    reason: >-
+      sh's tree is large and the run is deliberately throttled (concurrency
+      2); a 10m clock reported `0 issues` and `Timeout exceeded` together
+      under load and failed clean commits (#4094). A wedged run is noticed by
+      the machine being busy, not by this clock.
+  - knob: pre-commit.generated-exclude
+    value: ^(dist/|internal/oracle/testdata/golden\.json$|docs/spec/measurements\.md$)
+    reason: >-
+      golden.json is what `make oracle` wrote and measurements.md is
+      generated; a hook tidying either desyncs it from the run that produced
+      it (#1267).
+  - knob: misspell.ignore
+    value: [colour, cancelled]
+    reason: >-
+      Neither is prose. `colour` is one shell's parameter name, which a
+      recorded measurement must spell as the shell does; `cancelled` is the
+      Agent Client Protocol's spelling of a stopReason (each Go site carries
+      //nolint:misspell).

@@ -9,7 +9,7 @@ name: Go image
 #   image:
 #     name: Image
 #     needs: ci
-#     uses: blairham/.github/.github/workflows/go-image.yml@<sha> # main
+#     uses: blairham/.github/.github/workflows/go-image.yml@<sha of the latest tag> # vX.Y.Z
 #     with:
 #       run: ${{ needs.ci.outputs.code == 'true' }}
 #

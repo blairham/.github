@@ -1,0 +1,7 @@
+# blairham/.github's own departures from the baseline.
+overrides:
+  - knob: misspell.ignore
+    value: [colour, cancelled]
+    reason: >-
+      overrides/sh.yml has to name the two words sh exempts, so the prose
+      hook here must accept them too.

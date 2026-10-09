@@ -277,15 +277,16 @@ func TestUnifiedDiff(t *testing.T) {
 func TestStructuralChecks(t *testing.T) {
 	t.Parallel()
 	sha := strings.Repeat("a", 40)
+	pin := Pin{Tag: "v0.0.1", SHA: sha}
 	good := memSource{
 		"go.mod":                        testGoMod,
 		".tool-versions":                "golang 1.26.8\n",
-		".github/workflows/ci.yml":      "    uses: blairham/.github/.github/workflows/go-ci.yml@" + sha + " # main\n",
-		".github/workflows/release.yml": "    uses: blairham/.github/.github/workflows/go-release.yml@" + sha + " # main\n",
+		".github/workflows/ci.yml":      "    uses: blairham/.github/.github/workflows/go-ci.yml@" + sha + " # v0.0.1\n",
+		".github/workflows/release.yml": "    uses: blairham/.github/.github/workflows/go-release.yml@" + sha + " # v0.0.1\n",
 		"CHANGELOG.md":                  "# Changelog\n",
 	}
 	knobs := DefaultKnobs()
-	for _, c := range structuralChecks(good, &knobs, sha) {
+	for _, c := range structuralChecks(good, &knobs, pin) {
 		if !c.OK {
 			t.Errorf("good tree failed %s: %s", c.Name, c.Detail)
 		}
@@ -297,12 +298,125 @@ func TestStructuralChecks(t *testing.T) {
 		".github/workflows/goreleaser.yml": "uses: goreleaser/goreleaser-action@x\n",
 	}
 	failed := 0
-	for _, c := range structuralChecks(bad, &knobs, sha) {
+	for _, c := range structuralChecks(bad, &knobs, pin) {
 		if !c.OK {
 			failed++
 		}
 	}
 	if failed != 6 {
 		t.Errorf("bad tree failed %d checks, want all 6", failed)
+	}
+}
+
+func TestPinCheck(t *testing.T) {
+	t.Parallel()
+	latest, older := strings.Repeat("b", 40), strings.Repeat("a", 40)
+	pin := Pin{Tag: "v0.0.2", SHA: latest}
+	line := func(sha, comment string) string {
+		return "    uses: blairham/.github/.github/workflows/go-ci.yml@" + sha + comment + "\n"
+	}
+	for _, tc := range []struct {
+		name, content string
+		pin           Pin
+		ok            bool
+	}{
+		{"latest tag, tag comment", line(latest, " # v0.0.2"), pin, true},
+		{"older pin", line(older, " # v0.0.1"), pin, false},
+		{"latest sha, branch comment", line(latest, " # main"), pin, false},
+		{"latest sha, no comment", line(latest, ""), pin, false},
+		{"no tag yet", line(older, " # main"), Pin{}, true},
+		{"not a sha", "    uses: blairham/.github/.github/workflows/go-ci.yml@main\n", pin, false},
+	} {
+		if got := pinCheck("x", tc.content, goCIRef, tc.pin); got.OK != tc.ok {
+			t.Errorf("%s: OK=%v, want %v (%s)", tc.name, got.OK, tc.ok, got.Detail)
+		}
+	}
+}
+
+func TestParseSemver(t *testing.T) {
+	t.Parallel()
+	if !semverLess([3]int{0, 0, 9}, [3]int{0, 0, 10}) {
+		t.Error("v0.0.9 < v0.0.10 must compare numerically")
+	}
+	if _, ok := parseSemver("v1.2"); ok {
+		t.Error("v1.2 parsed")
+	}
+	if v, ok := parseSemver("v1.20.3"); !ok || v != [3]int{1, 20, 3} {
+		t.Errorf("v1.20.3 -> %v %v", v, ok)
+	}
+}
+
+func TestNewKnobsRefuseBadValues(t *testing.T) {
+	t.Parallel()
+	for name, doc := range map[string]string{
+		"exclusion without reason":  "  - knob: golangci.exclusions\n    reason: r\n    value: [{path: x/, linters: [funlen]}]\n",
+		"exclusion without linters": "  - knob: golangci.exclusions\n    reason: r\n    value: [{path: x/, linters: [], reason: r}]\n",
+		"exclusion with both paths": "  - knob: golangci.exclusions\n    reason: r\n    value: [{path: x/, path-except: y/, linters: [funlen], reason: r}]\n",
+		"exclusion unknown field":   "  - knob: golangci.exclusions\n    reason: r\n    value: [{paths: x/, linters: [funlen], reason: r}]\n",
+		"gosec not a rule":          "  - knob: golangci.gosec-excludes-extra\n    reason: r\n    value: [G1]\n",
+		"concurrency zero":          "  - knob: golangci.concurrency\n    reason: r\n    value: 0\n",
+		"timeout not a duration":    "  - knob: golangci.timeout\n    reason: r\n    value: soon\n",
+		"misspell two words":        "  - knob: misspell.ignore\n    reason: r\n    value: [\"a,b\"]\n",
+		"docker ignore no reason":   "  - knob: dependabot.docker-ignore\n    reason: r\n    value: [{dependency-name: x, update-types: [version-update:semver-major]}]\n",
+		"docker ignore bad type":    "  - knob: dependabot.docker-ignore\n    reason: r\n    value: [{dependency-name: x, update-types: [major], reason: r}]\n",
+	} {
+		ovs, err := ParseOverrides([]byte("overrides:\n" + doc))
+		if err == nil {
+			_, err = ApplyOverrides(ovs)
+		}
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestRenderRefusesKnobsWithNoEffect(t *testing.T) {
+	t.Parallel()
+	groups, err := LoadGroups(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := GatherFacts("example", memSource{"go.mod": testGoMod}, groups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, set := range map[string]func(*Knobs){
+		"govet analyzer not in the baseline": func(k *Knobs) { k.GolangciGovetDisable = []string{"nosuch"} },
+		"formatter not in the baseline":      func(k *Knobs) { k.GolangciFormattersPending = []string{"nosuch"} },
+		"extra linter already in baseline":   func(k *Knobs) { k.GolangciLintersExtra = []ExtraLinter{{Name: "funlen"}} },
+		"docker ignore without a Dockerfile": func(k *Knobs) {
+			k.DependabotDockerIgnore = []DockerIgnore{{DependencyName: "x", UpdateTypes: []string{"version-update:semver-major"}, Reason: "r"}}
+		},
+	} {
+		f := facts
+		f.Knobs = DefaultKnobs()
+		set(&f.Knobs)
+		if _, renderErr := Render(root, &f); renderErr == nil {
+			t.Errorf("%s: rendered", name)
+		}
+	}
+	// The real names render, so the refusals above are about the names.
+	f := facts
+	f.Knobs = DefaultKnobs()
+	f.Knobs.GolangciGovetDisable = []string{"fieldalignment"}
+	f.Knobs.GolangciFormattersPending = []string{"golines"}
+	out, err := Render(root, &f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gc := string(out[".golangci.yml"])
+	if strings.Contains(gc, "        - fieldalignment\n") || strings.Contains(gc, "    - golines\n") {
+		t.Errorf("disabled analyzer or pending formatter still enabled:\n%s", gc)
+	}
+	if !strings.Contains(gc, "    golines:\n") {
+		t.Error("golines settings removed with its enable entry")
+	}
+}
+
+func TestMisspellIgnore(t *testing.T) {
+	t.Parallel()
+	want := "import" + "as,colour" // split so no misspell --fix can rewrite it
+	if got := misspellIgnore([]string{"colour"}); got != want {
+		t.Fatalf("misspellIgnore = %q, want %q", got, want)
 	}
 }
