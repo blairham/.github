@@ -36,6 +36,7 @@ name: Go release
 #   id-token: write      keyless cosign and the provenance attestation
 #   attestations: write  the attestation store
 #   packages: write      only with `images`
+#   actions: read        only with `require-ci`
 # A snapshot (`snapshot: true`) needs only `contents: read`: it signs,
 # attests, logs in and publishes nothing, and its secrets are withheld from
 # GoReleaser even if passed.
@@ -86,6 +87,15 @@ on:
         description: Runs before anything is published.
         type: string
         default: go test -race ./...
+      require-ci:
+        description: >-
+          The caller's CI workflow file (e.g. 'ci.yml'). When set, the release
+          refuses a tag whose commit has no successful push run of that
+          workflow, and a caller can then pass `test-command: ''` instead of
+          running its suite a second time. The calling job must grant
+          `actions: read`.
+        type: string
+        default: ''
       images:
         description: >-
           JSON array of image names GoReleaser pushes (dockers_v2), e.g.
@@ -207,8 +217,28 @@ jobs:
           restore-keys: |
             go-release-${{ runner.os }}-
 
-      # The tag should only ever point at a commit CI already passed, but a
-      # release is the one place a second look costs nothing that matters.
+      # The tag should only ever point at a commit CI already passed. With
+      # `require-ci` that is checked rather than re-earned: a suite that has
+      # grown to tens of minutes (sh's took 21 of a 35-minute release) buys
+      # nothing the green run on the same commit did not, on runners CI
+      # already grades across more platforms than this one job has.
+      - name: Confirm CI passed on this commit
+        if: inputs.require-ci != '' && !inputs.snapshot
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WORKFLOW: ${{ inputs.require-ci }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW/runs?head_sha=$sha&event=push&status=success" --jq .total_count)"
+          if [ "$runs" -eq 0 ]; then
+            echo "::error::$TAG is $sha, which has no successful push run of $WORKFLOW; tag a commit CI passed on main"
+            exit 1
+          fi
+          echo "$WORKFLOW passed on $sha ($runs successful push run(s))"
+
+      # A release is the one place a second look costs nothing that matters,
+      # unless `require-ci` has already looked.
       - name: Run tests
         # An empty test-command skips this: a snapshot rendered beside CI's
         # own test job need not run the suite twice.
