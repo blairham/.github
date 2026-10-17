@@ -1,6 +1,6 @@
 name: Go image
 
-# Builds a repository's Dockerfile on every change, pushing nothing. The image
+# Builds a repository's images on every change, pushing nothing. The image
 # is published by GoReleaser on a tag (go-release.yml's `images`), so a
 # Dockerfile that stopped building would otherwise first fail after the tag
 # was public. Extracted from kafka-access-controller's `Build image` job; k4a,
@@ -12,6 +12,20 @@ name: Go image
 #     uses: blairham/.github/.github/workflows/go-image.yml@<sha of the latest tag> # vX.Y.Z
 #     with:
 #       run: ${{ needs.ci.outputs.code == 'true' }}
+#       builder: goreleaser   # when .goreleaser.yaml's dockers_v2 builds the images
+#
+# Two builders:
+#   docker      `docker buildx build` of the Dockerfile's `targets`. For a
+#               repository whose images GoReleaser does not build.
+#   goreleaser  `goreleaser release --snapshot --skip=publish,sign`, the
+#               release's own build: the images are the ones a tag would push,
+#               from the stages .goreleaser.yaml names, with the binaries
+#               GoReleaser compiled COPYed in. A Dockerfile whose default
+#               stage compiles from source pulls a Go toolchain image the
+#               release never needs, and public.ecr.aws answers repeated
+#               anonymous pulls with 429 Too Many Requests; this mode builds
+#               only what ships. `targets` and `platforms` are ignored: the
+#               config decides both.
 #
 # Gate it with `run`, never with a job-level `if:` in the caller: a skipped
 # caller job reports one check under the caller's name only, so a required
@@ -25,24 +39,33 @@ on:
           check as passed without building.
         type: boolean
         default: true
+      builder:
+        description: "'docker' (buildx on the Dockerfile) or 'goreleaser' (a GoReleaser snapshot)."
+        type: string
+        default: docker
       context:
-        description: Build context.
+        description: Build context (docker builder).
         type: string
         default: .
       file:
-        description: Dockerfile path, relative to the repository root.
+        description: Dockerfile path, relative to the repository root (docker builder).
         type: string
         default: Dockerfile
       targets:
         description: >-
           JSON array of build stages to build, one after another (they share
-          the build cache). '[""]' builds the default (last) stage.
+          the build cache). '[""]' builds the default (last) stage. Docker
+          builder only.
         type: string
         default: '[""]'
       platforms:
-        description: Comma-separated platforms, as the release builds them.
+        description: Comma-separated platforms, as the release builds them (docker builder).
         type: string
         default: linux/amd64
+      goreleaser-config:
+        description: GoReleaser config path; empty uses GoReleaser's default lookup (.goreleaser.yaml).
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -51,17 +74,31 @@ jobs:
   build:
     name: Build image
     runs-on: ubuntu-latest
+    env:
+      BUILDER: ${{ inputs.builder }}
     steps:
+      - name: Check inputs
+        if: inputs.run
+        run: |
+          set -euo pipefail
+          case "$BUILDER" in
+            docker|goreleaser) ;;
+            *) echo "::error::builder must be docker or goreleaser, not '$BUILDER'"; exit 1 ;;
+          esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: inputs.run
+        with:
+          # GoReleaser derives the snapshot version from the previous tag.
+          fetch-depth: ${{ inputs.builder == 'goreleaser' && 0 || 1 }}
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         if: inputs.run
       # Multi-platform builds need emulation for anything but the runner's
-      # own architecture.
+      # own architecture. GoReleaser's platforms are in its config, so it
+      # always gets it; registering binfmt costs a few seconds.
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-        if: inputs.run && contains(inputs.platforms, ',')
+        if: inputs.run && (inputs.builder == 'goreleaser' || contains(inputs.platforms, ','))
       - name: Build
-        if: inputs.run
+        if: inputs.run && inputs.builder == 'docker'
         env:
           CONTEXT: ${{ inputs.context }}
           FILE: ${{ inputs.file }}
@@ -75,4 +112,48 @@ jobs:
             echo "::group::docker buildx build ${args[*]} $CONTEXT"
             docker buildx build "${args[@]}" "$CONTEXT"
             echo "::endgroup::"
+          done
+
+      # As go-release.yml: the toolchain go.mod pins, and a release-scoped
+      # cache that warms every cross-compiled target.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: inputs.run && inputs.builder == 'goreleaser'
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: false
+      - name: Restore release Go cache
+        if: inputs.run && inputs.builder == 'goreleaser'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-release-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: |
+            go-release-${{ runner.os }}-
+      # No secrets: a snapshot signs, notarizes and publishes nothing (the
+      # notarize block self-disables without MACOS_SIGN_P12).
+      - name: Build with GoReleaser
+        if: inputs.run && inputs.builder == 'goreleaser'
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: >-
+            release --clean --snapshot --skip=publish,sign
+            ${{ inputs.goreleaser-config != '' && format('--config {0}', inputs.goreleaser-config) || '' }}
+      # A config with no dockers_v2 would build no image and pass anyway.
+      - name: Confirm images were built
+        if: inputs.run && inputs.builder == 'goreleaser'
+        run: |
+          set -euo pipefail
+          mapfile -t refs < <(jq -r '.[] | select(.type == "Docker Image") | .name' dist/artifacts.json | sort -u)
+          if [ "${#refs[@]}" -eq 0 ]; then
+            echo "::error::the GoReleaser snapshot built no Docker image; give .goreleaser.yaml a dockers_v2 entry, or use builder: docker"
+            exit 1
+          fi
+          for ref in "${refs[@]}"; do
+            docker image inspect "$ref" >/dev/null || { echo "::error::artifacts.json names $ref, which the daemon does not have"; exit 1; }
+            echo "built $ref"
           done

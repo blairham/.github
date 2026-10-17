@@ -21,14 +21,18 @@ public Go repositories (the list is `repos.yml`). Two things live here:
      Snapshot mode needs only `contents: read`, withholds every secret
      from GoReleaser, and uploads dist/ (plus `docker-images.tar` of every
      image it built) as a workflow artifact, output `snapshot-artifact`, so
-     a caller's own release checks run in a downstream job. That is the only
-     sanctioned way to run GoReleaser outside release.yml: drift still flags
+     a caller's own release checks run in a downstream job. That and
+     go-image.yml's `goreleaser` builder are the only sanctioned ways to run
+     GoReleaser outside release.yml: drift still flags
      any other workflow that uses goreleaser-action. This repository's CI
      proves it against `internal/testdata/release/`.
    - `.github/workflows/go-changes.yml` — change detection alone, outputs
      `code` and `matches` (named regex filters), so repository-specific jobs
      can `needs: changes` and start without waiting for all of go-ci.
-   - `.github/workflows/go-image.yml` — build-only Dockerfile check.
+   - `.github/workflows/go-image.yml` — build-only image check: `builder:
+     docker` (buildx on the Dockerfile's targets) or `builder: goreleaser`
+     (a GoReleaser snapshot, building exactly the images a tag pushes, with
+     no Go toolchain image pulled). It fails a snapshot that built no image.
    - `.github/workflows/go-chart.yml` — publish and sign Helm charts.
    Scorecard and CodeQL are deliberately **not** reusable: they are synced
    files, because Scorecard's `publish_results` only accepts a workflow that
