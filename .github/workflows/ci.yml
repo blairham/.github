@@ -109,6 +109,15 @@ jobs:
             exit 1
           fi
 
+  # go-image.yml's GoReleaser builder, by local path, against the same
+  # fixture: it must build the fixture's image from the snapshot.
+  image-goreleaser:
+    name: Image (GoReleaser)
+    uses: ./.github/workflows/go-image.yml
+    with:
+      builder: goreleaser
+      goreleaser-config: internal/testdata/release/goreleaser.yaml
+
   # go-release.yml's snapshot path, by local path, from a job granted only
   # `contents: read` — exactly what a caller's render job has — against a
   # fixture config that builds a binary, an archive, a Homebrew formula and
