@@ -49,13 +49,14 @@ jobs:
       # Both fields, not just appVersion: the chart is pushed under `version`,
       # and an unset image.tag falls back to `appVersion`. Either one lagging
       # the tag publishes a chart that installs the wrong binary or overwrites
-      # the wrong version.
+      # the wrong version. A trailing comment is allowed: release-please's
+      # generic updater marks the lines it bumps with `# x-release-please-version`.
       - name: Confirm the chart names this version
         run: |
           set -euo pipefail
           chart="charts/$CHART/Chart.yaml"
-          version="$(sed -n 's/^version: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$chart")"
-          app="$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$chart")"
+          version="$(sed -n 's/^version: *"\{0,1\}\([^"#[:space:]]*\)"\{0,1\} *\(#.*\)\{0,1\}$/\1/p' "$chart")"
+          app="$(sed -n 's/^appVersion: *"\{0,1\}\([^"#[:space:]]*\)"\{0,1\} *\(#.*\)\{0,1\}$/\1/p' "$chart")"
           if [ "$version" != "${TAG#v}" ] || [ "$app" != "${TAG#v}" ]; then
             echo "::error::$chart version=$version appVersion=$app, but the tag is $TAG"
             exit 1

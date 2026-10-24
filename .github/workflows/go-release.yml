@@ -291,7 +291,7 @@ jobs:
           set -euo pipefail
           status=0
           for dir in $(jq -r '.[]' <<<"$CHARTS"); do
-            app="$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$dir/Chart.yaml")"
+            app="$(sed -n 's/^appVersion: *"\{0,1\}\([^"#[:space:]]*\)"\{0,1\} *\(#.*\)\{0,1\}$/\1/p' "$dir/Chart.yaml")"
             if [ "$app" != "${TAG#v}" ]; then
               echo "::error::$dir/Chart.yaml appVersion is '$app' but the tag is $TAG; bump the chart and re-tag"
               status=1
