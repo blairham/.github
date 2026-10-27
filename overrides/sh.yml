@@ -63,7 +63,6 @@ overrides:
       the way it adopts linters, one per pull request once the whole tree is
       clean under it.
     value:
-      - gofmt
       - gci
       - golines
   - knob: golangci.linters-extra
