@@ -126,11 +126,14 @@ overrides:
       under load and failed clean commits (#4094). A wedged run is noticed by
       the machine being busy, not by this clock.
   - knob: pre-commit.generated-exclude
-    value: ^(dist/|internal/oracle/testdata/golden\.json$|docs/spec/measurements\.md$)
+    value: ^(dist/|internal/oracle/testdata/golden\.json$|docs/spec/measurements\.md$|tests/[^/]+/cases/.*\.txtar$)
     reason: >-
       golden.json is what `make oracle` wrote and measurements.md is
       generated; a hook tidying either desyncs it from the run that produced
-      it (#1267).
+      it (#1267). A .txtar under tests/<dialect>/cases/ is a recorded shell
+      case whose bytes are the expectation, trailing whitespace included
+      (sh #6947 hand-wrote this exclude into the rendered file, which the
+      next sync would have undone; it belongs here).
   - knob: misspell.ignore
     value: [colour, cancelled]
     reason: >-
