@@ -57,13 +57,6 @@ overrides:
     reason: >-
       No CHANGELOG.md: dozens of parallel agent pull requests would conflict
       on it constantly. Release notes are GoReleaser's generated list.
-  - knob: golangci.formatters-pending
-    reason: >-
-      sh runs gofumpt and goimports; it adopts the baseline's other formatters
-      the way it adopts linters, one per pull request once the whole tree is
-      clean under it.
-    value:
-      - golines
   - knob: golangci.linters-extra
     reason: >-
       forbidigo keeps interp/ (a library embedded several Runners to a
