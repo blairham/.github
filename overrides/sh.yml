@@ -52,11 +52,6 @@ overrides:
       - importas
       - interfacebloat
       - wastedassign
-  - knob: release.notes
-    value: generated
-    reason: >-
-      No CHANGELOG.md: dozens of parallel agent pull requests would conflict
-      on it constantly. Release notes are GoReleaser's generated list.
   - knob: golangci.linters-extra
     reason: >-
       forbidigo keeps interp/ (a library embedded several Runners to a
