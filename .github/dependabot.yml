@@ -23,3 +23,11 @@ updates:
       codeql-action:
         patterns:
           - "github/codeql-action*"
+      # Every reusable workflow (go-ci, go-changes, go-release, go-image,
+      # go-chart) is pinned at the same blairham/.github tag, and drift wants
+      # all of them on the latest. Each path is its own dependency, so split,
+      # a tag arrives as one PR per workflow, and the strict ruleset makes each
+      # wait for a rebase after the one before it lands.
+      blairham-github:
+        patterns:
+          - "blairham/.github/*"
