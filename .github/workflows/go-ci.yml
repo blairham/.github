@@ -119,14 +119,14 @@ jobs:
         # answer.
         env:
           SKIP: golangci-lint
-        uses: blairham/go-pre-commit@b3deb289b038678e3b5af79e1442f71fc0f8a28c # v4.6.16
+        uses: blairham/go-pre-commit@68b4e7b2147d06d10d91f0989513aad6987245cb # v4.7.0
         with:
           extra_args: --from-ref ${{ steps.range.outputs.base }} --to-ref ${{ steps.range.outputs.head }}
       - name: Lint what this change introduces
         if: inputs.golangci-lint-hook
         # Same config, same pin, same hook — asked the narrower question and
         # told not to fix (`--fix=false` in the hook's args).
-        uses: blairham/go-pre-commit@b3deb289b038678e3b5af79e1442f71fc0f8a28c # v4.6.16
+        uses: blairham/go-pre-commit@68b4e7b2147d06d10d91f0989513aad6987245cb # v4.7.0
         with:
           # The step above already restored ~/.cache/pre-commit; restoring it
           # again untars over Go's read-only module files and fails.
@@ -255,7 +255,7 @@ jobs:
           exit "$status"
       - name: Upload failing inputs
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-failures
           path: '**/testdata/fuzz/**'
