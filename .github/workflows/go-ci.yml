@@ -156,7 +156,7 @@ jobs:
       # means bumping this pin and go-changes.yml's together.
       - id: filter
         name: Is any of this code?
-        uses: blairham/.github/.github/actions/changes@f0ec17eb08a61a84702a9c58c3369dba4ed21268 # main, #13
+        uses: blairham/.github/.github/actions/changes@3b8b79eb7dc15fb9d60cc630e193722c78c14f24 # main, #13
 
   test:
     name: Build and test (${{ matrix.os }})
