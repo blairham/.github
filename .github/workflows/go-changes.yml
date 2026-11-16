@@ -62,6 +62,6 @@ jobs:
       # Pinned by a commit of this repository, like go-ci.yml's copy of the
       # same step; bump the two together.
       - id: filter
-        uses: blairham/.github/.github/actions/changes@3b8b79eb7dc15fb9d60cc630e193722c78c14f24 # main, #13
+        uses: blairham/.github/.github/actions/changes@35e2f43b951da3db868770aad65231e50fc8d80a # main, #13
         with:
           filters: ${{ inputs.filters }}
