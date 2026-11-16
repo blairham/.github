@@ -22,7 +22,7 @@ import (
 // go.mod's `go` directive and .tool-versions' golang line alike, because a
 // patch release is how the standard library's vulnerabilities get fixed and
 // a hard-coded patch goes stale the month it is written.
-const GoMinor = "1.26"
+const GoMinor = "1.27"
 
 // Source is a repository's tree: a local checkout for `sync`, the default
 // branch on GitHub for `drift`.
