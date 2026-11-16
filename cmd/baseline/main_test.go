@@ -24,7 +24,7 @@ func TestDriftFetchErrorIsAFailedCheckNotDrift(t *testing.T) {
 		case "/repos/blairham/.github/tags":
 			_, _ = w.Write([]byte(`[]`))
 		case "/go":
-			_, _ = w.Write([]byte(`[{"version": "go1.26.9", "stable": true}]`))
+			_, _ = w.Write([]byte(`[{"version": "go1.27.4", "stable": true}]`))
 		default:
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"message": "API rate limit exceeded for 127.0.0.1."}`))
