@@ -137,6 +137,54 @@ jobs:
       snapshot-artifact: release-snapshot-fixture
       snapshot-retention-days: 1
 
+  # go-release.yml's goreleaser-ref path: GoReleaser built from a pinned
+  # blairham/goreleaser commit, rendering a homebrew_bottles formula. The
+  # checks below hold the formula to its bottles, so a ref that stops
+  # producing them fails here before any caller tags a release with it.
+  render-bottles:
+    name: Render a release (homebrew_bottles)
+    permissions:
+      contents: read
+    uses: ./.github/workflows/go-release.yml
+    with:
+      snapshot: true
+      goreleaser-config: internal/testdata/release/goreleaser-bottles.yaml
+      goreleaser-ref: 6b2bad9d43ac7c6469cd2607a8b79bbbcbbc4b80
+      test-command: ''
+      release-notes: generated
+      snapshot-artifact: release-snapshot-bottles
+      snapshot-retention-days: 1
+      snapshot-save-images: false
+
+  render-bottles-checks:
+    name: Render checks (homebrew_bottles)
+    needs: render-bottles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.render-bottles.outputs.snapshot-artifact }}
+          path: dist
+      - name: The formula pours the bottles that were built
+        run: |
+          set -euo pipefail
+          formula=dist/homebrew_bottles/Formula/baseline-fixture.rb
+          cat "$formula"
+          grep -q '^  bottle do$' "$formula"
+          grep -q '^  depends_on "go" => :build$' "$formula"
+          grep -q 'std_go_args' "$formula"
+          grep -qE '^  url ".*/baseline-.*\.tar\.gz"$' "$formula"
+          n=0
+          for tag in arm64_monterey monterey arm64_linux x86_64_linux; do
+            bottle="$(ls dist/homebrew_bottles/baseline-fixture-*."$tag".bottle.tar.gz)"
+            sum="$(sha256sum "$bottle" | cut -d' ' -f1)"
+            grep -q "$tag: \"$sum\"" "$formula" || { echo "::error::$tag bottle sha256 not in formula"; exit 1; }
+            grep -q "$sum  $(basename "$bottle")" dist/checksums.txt || { echo "::error::$tag bottle missing from checksums.txt"; exit 1; }
+            tar tzf "$bottle" | grep -qE '^baseline-fixture/[^/]+/bin/baseline$' || { echo "::error::$tag bottle layout"; exit 1; }
+            n=$((n + 1))
+          done
+          [ "$n" -eq 4 ]
+
   render-checks:
     name: Render checks
     needs: render
