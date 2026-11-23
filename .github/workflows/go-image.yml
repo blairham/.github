@@ -66,6 +66,13 @@ on:
         description: GoReleaser config path; empty uses GoReleaser's default lookup (.goreleaser.yaml).
         type: string
         default: ''
+      goreleaser-ref:
+        description: >-
+          Full commit SHA of blairham/goreleaser to build and run instead of
+          the official release (builder goreleaser only), for configs that use
+          `homebrew_bottles:`. Empty uses the official GoReleaser.
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -135,7 +142,7 @@ jobs:
       # No secrets: a snapshot signs, notarizes and publishes nothing (the
       # notarize block self-disables without MACOS_SIGN_P12).
       - name: Build with GoReleaser
-        if: inputs.run && inputs.builder == 'goreleaser'
+        if: inputs.run && inputs.builder == 'goreleaser' && inputs.goreleaser-ref == ''
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
@@ -143,6 +150,25 @@ jobs:
           args: >-
             release --clean --snapshot --skip=publish,sign
             ${{ inputs.goreleaser-config != '' && format('--config {0}', inputs.goreleaser-config) || '' }}
+      # Same as go-release.yml: a pinned fork, fetched outside the workspace
+      # so GoReleaser's dirty-tree check stays green.
+      - name: Build with GoReleaser (blairham/goreleaser)
+        if: inputs.run && inputs.builder == 'goreleaser' && inputs.goreleaser-ref != ''
+        env:
+          REF: ${{ inputs.goreleaser-ref }}
+          CONFIG: ${{ inputs.goreleaser-config }}
+          GOTOOLCHAIN: auto
+        run: |
+          set -euo pipefail
+          [[ "$REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::goreleaser-ref must be a full commit SHA, got '$REF'"; exit 1; }
+          src="$RUNNER_TEMP/goreleaser-src"
+          git init -q "$src"
+          git -C "$src" fetch -q --depth 1 https://github.com/blairham/goreleaser.git "$REF"
+          git -C "$src" checkout -q FETCH_HEAD
+          go build -C "$src" -trimpath -o "$RUNNER_TEMP/goreleaser" .
+          args=(release --clean --snapshot --skip=publish,sign)
+          if [ -n "$CONFIG" ]; then args+=(--config "$CONFIG"); fi
+          "$RUNNER_TEMP/goreleaser" "${args[@]}"
       # A config with no dockers_v2 would build no image and pass anyway.
       - name: Confirm images were built
         if: inputs.run && inputs.builder == 'goreleaser'
