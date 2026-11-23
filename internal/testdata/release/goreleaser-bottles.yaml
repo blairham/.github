@@ -1,0 +1,38 @@
+# A release fixture for go-release.yml's goreleaser-ref path: GoReleaser built
+# from blairham/goreleaser, rendering a homebrew_bottles formula. Bottles need
+# darwin and linux binaries and the source archive the formula builds from.
+# Nothing here is ever published — this repository has no release.
+version: 2
+
+project_name: baseline
+
+builds:
+  - id: baseline
+    main: ./cmd/baseline
+    binary: baseline
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: baseline
+
+source:
+  enabled: true
+
+checksum:
+  name_template: checksums.txt
+
+# Written to dist/homebrew_bottles/ in a snapshot; never uploaded.
+homebrew_bottles:
+  - name: baseline-fixture
+    repository:
+      owner: blairham
+      name: homebrew-tap
+    skip_upload: true
+    test: |
+      system "#{bin}/baseline", "knobs"
+
+changelog:
+  disable: false

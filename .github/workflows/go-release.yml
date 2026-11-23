@@ -123,6 +123,14 @@ on:
         description: GoReleaser config path; empty uses GoReleaser's default lookup (.goreleaser.yaml).
         type: string
         default: ''
+      goreleaser-ref:
+        description: >-
+          Full commit SHA of blairham/goreleaser to build and run instead of
+          the official release. Empty uses the official GoReleaser. Needed for
+          `homebrew_bottles:` (source formulas that pour bottles) until that
+          lands upstream as goreleaser/goreleaser#7342.
+        type: string
+        default: ''
       snapshot-artifact:
         description: Name of the workflow artifact a snapshot uploads dist/ as.
         type: string
@@ -141,7 +149,7 @@ on:
         default: true
     secrets:
       HOMEBREW_TAP_TOKEN:
-        description: Fine-grained token with contents:write on blairham/homebrew-tap, for a `brews:` formula.
+        description: Fine-grained token with contents:write on blairham/homebrew-tap, for a `brews:` or `homebrew_bottles:` formula.
         required: false
       MACOS_SIGN_P12:
         description: Apple Developer ID certificate (base64 .p12) for notarize.macos.
@@ -322,7 +330,27 @@ jobs:
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         if: ${{ !inputs.snapshot }}
 
+      # The fork is fetched outside the workspace: an untracked directory in
+      # it would fail GoReleaser's dirty-tree check. Only a full SHA is
+      # accepted, so the binary that releases is pinned exactly like every
+      # action here.
+      - name: Build GoReleaser from blairham/goreleaser
+        if: inputs.goreleaser-ref != ''
+        env:
+          REF: ${{ inputs.goreleaser-ref }}
+          GOTOOLCHAIN: auto
+        run: |
+          set -euo pipefail
+          [[ "$REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::goreleaser-ref must be a full commit SHA, got '$REF'"; exit 1; }
+          src="$RUNNER_TEMP/goreleaser-src"
+          git init -q "$src"
+          git -C "$src" fetch -q --depth 1 https://github.com/blairham/goreleaser.git "$REF"
+          git -C "$src" checkout -q FETCH_HEAD
+          go build -C "$src" -trimpath -o "$RUNNER_TEMP/goreleaser" .
+          "$RUNNER_TEMP/goreleaser" --version
+
       - name: Run GoReleaser
+        if: inputs.goreleaser-ref == ''
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
@@ -338,6 +366,35 @@ jobs:
         # and a render must not be able to reach it even if both skip guards
         # were wrong.
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ !inputs.snapshot && secrets.HOMEBREW_TAP_TOKEN || '' }}
+          # The notarize block in .goreleaser.yaml self-disables when
+          # MACOS_SIGN_P12 is unset, so releases work without these.
+          MACOS_SIGN_P12: ${{ !inputs.snapshot && secrets.MACOS_SIGN_P12 || '' }}
+          MACOS_SIGN_PASSWORD: ${{ !inputs.snapshot && secrets.MACOS_SIGN_PASSWORD || '' }}
+          MACOS_NOTARY_ISSUER_ID: ${{ !inputs.snapshot && secrets.MACOS_NOTARY_ISSUER_ID || '' }}
+          MACOS_NOTARY_KEY_ID: ${{ !inputs.snapshot && secrets.MACOS_NOTARY_KEY_ID || '' }}
+          MACOS_NOTARY_KEY: ${{ !inputs.snapshot && secrets.MACOS_NOTARY_KEY || '' }}
+
+      - name: Run GoReleaser (blairham/goreleaser)
+        if: inputs.goreleaser-ref != ''
+        # Inputs reach the shell through env, never `${{ }}` in the script.
+        run: |
+          set -euo pipefail
+          args=(release --clean)
+          if [ -n "$CONFIG" ]; then args+=(--config "$CONFIG"); fi
+          if [ "$SNAPSHOT" = true ]; then
+            args+=(--snapshot --skip=publish,sign)
+          elif [ -n "$NOTES_ARGS" ]; then
+            read -ra notes <<<"$NOTES_ARGS"
+            args+=("${notes[@]}")
+          fi
+          "$RUNNER_TEMP/goreleaser" "${args[@]}"
+        # Same secrets rule as the step above: a snapshot gets none.
+        env:
+          CONFIG: ${{ inputs.goreleaser-config }}
+          SNAPSHOT: ${{ inputs.snapshot }}
+          NOTES_ARGS: ${{ steps.notes.outputs.args }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ !inputs.snapshot && secrets.HOMEBREW_TAP_TOKEN || '' }}
           # The notarize block in .goreleaser.yaml self-disables when

@@ -17,7 +17,10 @@ public Go repositories (the list is `repos.yml`). Two things live here:
    - `.github/workflows/go-release.yml` — GoReleaser, keyless cosign over
      `checksums.txt`, `actions/attest-build-provenance`, the bundle attached
      as `<repo>-<tag>.intoto.jsonl`, optional image provenance; `snapshot`
-     input for a dry run.
+     input for a dry run. `goreleaser-ref` (a full SHA of blairham/goreleaser)
+     builds and runs that fork instead of the official GoReleaser, for
+     `homebrew_bottles:` until goreleaser/goreleaser#7342 lands; CI renders
+     `internal/testdata/release/goreleaser-bottles.yaml` through it.
      Snapshot mode needs only `contents: read`, withholds every secret
      from GoReleaser, and uploads dist/ (plus `docker-images.tar` of every
      image it built) as a workflow artifact, output `snapshot-artifact`, so
